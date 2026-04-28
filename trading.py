@@ -44,8 +44,6 @@ TAB_ROUTES = {
     "smart":     4,
     "calc":      5,
     "news":      6,
-    "paper":     7,
-    "journal":   8,
 }
 TAB_NAMES = [
     "📋 Watchlist",
@@ -55,10 +53,8 @@ TAB_NAMES = [
     "🏦 Smart Money",
     "🧮 P&L Calculator",
     "📰 News & Events",
-    "📝 Paper Trading",
-    "📓 Trade Journal",
 ]
-TAB_ICONS = ["📋","🎯","🔍","🤖","🏦","🧮","📰","📝","📓"]
+TAB_ICONS = ["📋","🎯","🔍","🤖","🏦","🧮","📰"]
 TAB_KEYS  = list(TAB_ROUTES.keys())
 
 # Read current tab from URL
@@ -1160,8 +1156,6 @@ with st.expander("🔗 Open any tab in a separate browser window"):
         ("🏦 Smart Money",   "smart",     "#d97706"),
         ("🧮 P&L Calc",      "calc",      "#dc2626"),
         ("📰 News",          "news",      "#475569"),
-        ("📝 Paper Trade",   "paper",     "#15803d"),
-        ("📓 Journal",       "journal",   "#1d4ed8"),
     ]
     for idx, (lname, lkey, lcolor) in enumerate(link_data):
         col_idx = idx % 5
@@ -1267,8 +1261,8 @@ for _lname, _lkey in [
     ("🎯 Trade Setup",  "setup"),
     ("🔍 Scanner",      "scanner"),
     ("🤖 ML",           "ml"),
-    ("📝 Paper Trade",  "paper"),
-    ("📓 Journal",      "journal"),
+    ("🏦 Smart Money",  "smart"),
+    ("🧮 P&L Calc",     "calc"),
 ]:
     st.sidebar.markdown(
         f"<a href='{_base_url}/?tab={_lkey}' "
@@ -1321,7 +1315,7 @@ stick = st.session_state["st"]
 # ══════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════
-T1,T2,T3,T4,T5,T6,T7,T8,T9 = st.tabs(TAB_NAMES)
+T1,T2,T3,T4,T5,T6,T7 = st.tabs(TAB_NAMES)
 
 # ╔══════════════════════════════════════════════════════╗
 # ║  TAB 1 — WATCHLIST                                  ║
@@ -2166,20 +2160,26 @@ with T3:
             help="Send Telegram alert when score reaches this"
         )
 
-    run_col, auto_col = st.columns([1,1])
-    with run_col:
-        run_scanner = st.button(
-            "🚀 Scan All Stocks Now",
-            type="primary",
-            key="run_scanner",
-            use_container_width=True
-        )
-    with auto_col:
-        auto_scan = st.toggle(
-            "🔄 Auto scan every 5 min",
-            value=False,
-            key="auto_scan"
-        )
+    # Mobile-friendly controls - stack vertically on small screens
+    run_scanner = st.button(
+        "🚀 Scan All Stocks Now",
+        type="primary",
+        key="run_scanner",
+        use_container_width=True
+    )
+    st.markdown(
+        "<div style='margin:6px 0;padding:10px 14px;"
+        "background:#f0f9ff;border:1px solid #bae6fd;"
+        "border-radius:8px;font-size:13px;color:#0369a1'>"
+        "🔄 <b>Auto scan every 5 min</b> — "
+        "Toggle below to enable automatic scanning</div>",
+        unsafe_allow_html=True
+    )
+    auto_scan = st.checkbox(
+        "Enable auto scan every 5 minutes",
+        value=False,
+        key="auto_scan"
+    )
 
     # ── Helper: send Telegram ─────────────────────────────
     def send_telegram(token, chat_id, message):
@@ -2200,11 +2200,120 @@ with T3:
             return False
 
     # ── Run scanner ────────────────────────────────────────
-    def run_scan_engine(stocks_to_scan, timeframe, min_sc, alert_sc):
-        results   = []
-        alerted   = []
-        prog      = st.progress(0, text="Starting scan...")
-        total     = len(stocks_to_scan)
+    def get_option_levels(price: float, direction: str) -> dict:
+        """Calculate ATM / ITM / OTM strike levels."""
+        if price > 30000: step = 500
+        elif price > 10000: step = 100
+        elif price > 3000:  step = 50
+        elif price > 500:   step = 20
+        else:               step = 10
+
+        atm = round(price / step) * step
+
+        if direction == "UPTREND":
+            return {
+                "opt_type": "CE (Call)",
+                "ITM": atm - step,
+                "ATM": atm,
+                "OTM": atm + step,
+                "recommend": atm,
+                "step": step,
+            }
+        else:
+            return {
+                "opt_type": "PE (Put)",
+                "ITM": atm + step,
+                "ATM": atm,
+                "OTM": atm - step,
+                "recommend": atm,
+                "step": step,
+            }
+
+    def historical_consistency(sdf: pd.DataFrame,
+                               direction: str) -> dict:
+        """
+        Validates signal across last 3, 5, 10 candles.
+        Ensures results dont flip every 15 minutes.
+        Returns a consistency score 0-10.
+        """
+        try:
+            c   = sdf["Close"].squeeze().astype(float)
+            v   = sdf["Volume"].squeeze().astype(float)
+            e9  = ta.trend.ema_indicator(c, 9)
+            e21 = ta.trend.ema_indicator(c, 21)
+            rsi = ta.momentum.rsi(c, 14)
+            vol_avg = v.rolling(20).mean()
+
+            # 1. Last 3 candles price vs EMA9 and EMA21
+            c3 = 0
+            for i in range(1, 4):
+                if direction == "UPTREND":
+                    if (float(c.iloc[-i]) > float(e9.iloc[-i])
+                            and float(e9.iloc[-i]) >
+                            float(e21.iloc[-i])):
+                        c3 += 1
+                else:
+                    if (float(c.iloc[-i]) < float(e9.iloc[-i])
+                            and float(e9.iloc[-i]) <
+                            float(e21.iloc[-i])):
+                        c3 += 1
+
+            # 2. Last 5 candles price vs EMA21
+            c5 = 0
+            for i in range(1, 6):
+                if direction == "UPTREND":
+                    if float(c.iloc[-i]) > float(e21.iloc[-i]):
+                        c5 += 1
+                else:
+                    if float(c.iloc[-i]) < float(e21.iloc[-i]):
+                        c5 += 1
+
+            # 3. RSI in correct zone last 5 candles
+            rsi_ok = 0
+            for i in range(1, 6):
+                rv = float(rsi.iloc[-i])
+                if direction == "UPTREND" and 45 < rv < 78:
+                    rsi_ok += 1
+                elif direction == "DOWNTREND" and 22 < rv < 55:
+                    rsi_ok += 1
+
+            # 4. Volume above average last 3 candles
+            vol_ok = sum(
+                1 for i in range(1, 4)
+                if float(v.iloc[-i]) > float(vol_avg.iloc[-i])
+            )
+
+            # Weighted consistency score
+            score = round(
+                (c3/3)*4 + (c5/5)*3 +
+                (rsi_ok/5)*2 + (vol_ok/3)*1, 1
+            )
+
+            reliability = (
+                "🔥 Very High" if score >= 8 else
+                "✅ High"      if score >= 6 else
+                "📈 Moderate"  if score >= 4 else
+                "⚠️ Low — wait"
+            )
+            return {
+                "score":       score,
+                "reliability": reliability,
+                "candles_3":   c3,
+                "candles_5":   c5,
+                "rsi_ok":      rsi_ok,
+                "vol_ok":      vol_ok,
+            }
+        except:
+            return {"score":0, "reliability":"—",
+                    "candles_3":0, "candles_5":0,
+                    "rsi_ok":0, "vol_ok":0}
+
+    def run_scan_engine(stocks_to_scan, timeframe,
+                        min_sc, alert_sc):
+        results = []
+        alerted = []
+        prog    = st.progress(0, text="Starting scan...")
+        total   = len(stocks_to_scan)
 
         for i, sname in enumerate(stocks_to_scan):
             sym = STOCKS.get(sname)
@@ -2223,8 +2332,8 @@ with T3:
                 if sdf.empty or len(sdf) < 55:
                     continue
 
-                slp  = live_price(sym)
-                sig  = compute_all(sdf, slp)
+                slp = live_price(sym)
+                sig = compute_all(sdf, slp)
                 if sig is None:
                     continue
 
@@ -2240,64 +2349,111 @@ with T3:
                     "DOWNTREND" if dn_s > up_s else
                     "MIXED"
                 )
-                action = (
-                    "BUY CE" if direction == "UPTREND"
-                    else "BUY PE" if direction == "DOWNTREND"
-                    else "WAIT"
-                )
-                signal_strength = (
-                    "STRONG" if best >= 8 else
-                    "GOOD"   if best >= 6 else
-                    "WATCH"
+                if direction == "MIXED":
+                    continue
+
+                action = ("BUY CE" if direction == "UPTREND"
+                          else "BUY PE")
+
+                # Historical consistency (key fix for
+                # results changing every 15 min)
+                hist = historical_consistency(sdf, direction)
+
+                # Skip low consistency signals
+                if hist["score"] < 3:
+                    continue
+
+                # Option levels
+                opt = get_option_levels(sig["cp"], direction)
+
+                # SL and targets
+                sl_v = (sig["sl_long"]
+                        if direction == "UPTREND"
+                        else sig["sl_short"])
+                t1_v = (sig["tgt1"]
+                        if direction == "UPTREND"
+                        else sig["tgt1s"])
+                t2_v = (sig["tgt2"]
+                        if direction == "UPTREND"
+                        else sig["tgt2s"])
+                t3_v = (sig["tgt3"]
+                        if direction == "UPTREND"
+                        else sig["tgt3s"])
+
+                # Risk reward
+                risk   = abs(sig["cp"] - sl_v)
+                reward = abs(t1_v - sig["cp"])
+                rr     = round(reward/(risk+0.001), 2)
+
+                # Combined score
+                combined = round(
+                    best*0.6 + hist["score"]*0.4, 1
                 )
 
+                # Price change
+                try:
+                    chg = round(
+                        ((sig["cp"] -
+                          float(sdf["Close"].iloc[-2])) /
+                         float(sdf["Close"].iloc[-2]))*100, 2
+                    )
+                except:
+                    chg = 0
+
                 result = {
-                    "Stock":      sname,
-                    "Sym":        sym,
-                    "Score":      best,
-                    "Direction":  direction,
-                    "Action":     action,
-                    "Strength":   signal_strength,
-                    "Price":      sig["cp"],
-                    "Change%":    sig["change"] if "change" in sig else 0,
-                    "RSI":        sig["rv"],
-                    "ADX":        sig["adxv"],
-                    "VolSurge":   sig["vsurge"],
-                    "EMA9":       sig["e9v"],
-                    "SL":         sig["sl_long"] if direction=="UPTREND"
-                                  else sig["sl_short"],
-                    "T1":         sig["tgt1"] if direction=="UPTREND"
-                                  else sig["tgt1s"],
-                    "T2":         sig["tgt2"] if direction=="UPTREND"
-                                  else sig["tgt2s"],
+                    "Stock":       sname,
+                    "Sym":         sym,
+                    "Score":       best,
+                    "HistScore":   hist["score"],
+                    "Combined":    combined,
+                    "Reliability": hist["reliability"],
+                    "Direction":   direction,
+                    "Action":      action,
+                    "Price":       sig["cp"],
+                    "Change%":     chg,
+                    "RSI":         sig["rv"],
+                    "ADX":         sig["adxv"],
+                    "VolSurge":    sig["vsurge"],
+                    "Entry":       sig["e9v"],
+                    "SL":          sl_v,
+                    "T1":          t1_v,
+                    "T2":          t2_v,
+                    "T3":          t3_v,
+                    "RR":          rr,
+                    "OptType":     opt["opt_type"],
+                    "ATM":         opt["ATM"],
+                    "ITM":         opt["ITM"],
+                    "OTM":         opt["OTM"],
+                    "Consist3":    hist["candles_3"],
+                    "Consist5":    hist["candles_5"],
                 }
                 results.append(result)
 
-                # Telegram alert for strong signals
+                # Telegram alert
                 if (best >= alert_sc and
-                        "tg_token_saved" in st.session_state and
-                        "tg_chat_saved"  in st.session_state):
-                    token   = st.session_state["tg_token_saved"]
-                    chat_id = st.session_state["tg_chat_saved"]
-                    if token and chat_id:
-                        sl_val = result["SL"]
-                        t1_val = result["T1"]
-                        t2_val = result["T2"]
+                        "tg_token_saved" in st.session_state
+                        and "tg_chat_saved" in
+                        st.session_state):
+                    tkn = st.session_state["tg_token_saved"]
+                    cid = st.session_state["tg_chat_saved"]
+                    if tkn and cid:
                         msg = (
-                            f"<b>SIGNAL: {sname}</b>\n"
-                            f"Direction: {direction}\n"
-                            f"Action: <b>{action}</b>\n"
-                            f"Score: {best}/10\n"
+                            f"<b>{sname}</b> — {action}\n"
+                            f"Score: {best}/10 | "
+                            f"Combined: {combined}/10\n"
+                            f"Reliability: {hist['reliability']}\n"
                             f"Price: Rs {sig['cp']:,.2f}\n"
-                            f"Entry EMA9: Rs {sig['e9v']:,.2f}\n"
-                            f"Stop Loss: Rs {sl_val:,.2f}\n"
-                            f"Target 1: Rs {t1_val:,.2f}\n"
-                            f"Target 2: Rs {t2_val:,.2f}\n"
-                            f"RSI: {sig['rv']:.1f} | ADX: {sig['adxv']:.1f}\n"
-                            f"Vol: {'Yes' if sig['vsurge'] else 'No'} | TF: {timeframe}"
+                            f"Entry: Rs {sig['e9v']:,.2f}\n"
+                            f"SL: Rs {sl_v:,.2f}\n"
+                            f"T1: Rs {t1_v:,.2f} | "
+                            f"T2: Rs {t2_v:,.2f}\n"
+                            f"ATM: {opt['ATM']} | "
+                            f"ITM: {opt['ITM']} | "
+                            f"OTM: {opt['OTM']}\n"
+                            f"RSI: {sig['rv']:.1f} | "
+                            f"R:R {rr}:1"
                         )
-                        sent = send_telegram(token, chat_id, msg)
-                        if sent:
+                        if send_telegram(tkn, cid, msg):
                             alerted.append(sname)
 
             except Exception:
@@ -2305,7 +2461,6 @@ with T3:
 
         prog.empty()
         return results, alerted
-
     # ── Display results ────────────────────────────────────
     if run_scanner or auto_scan:
         if auto_scan and not run_scanner:
@@ -2354,196 +2509,323 @@ with T3:
                         f"{now_ist().strftime('%H:%M:%S IST')} | "
                         f"Timeframe: {scan_tf}*")
 
+            # ── Sort by combined score ─────────────────────
+            results.sort(
+                key=lambda x: x["Combined"], reverse=True
+            )
+
             # ── Strong signals (score 8+) ──────────────────
-            if strong:
+            strong_r = [r for r in results
+                        if r["Score"] >= 8]
+            good_r   = [r for r in results
+                        if 6 <= r["Score"] < 8]
+
+            if strong_r:
                 st.markdown("---")
-                st.markdown("### STRONG SIGNALS — Score 8–10")
-                st.caption("These are your highest priority trades")
+                st.markdown(
+                    f"### 🔥 STRONG SIGNALS — "
+                    f"{len(strong_r)} found"
+                )
+                st.caption(
+                    "Confirmed by both technical score AND "
+                    "historical consistency. Highest priority."
+                )
 
-                for r in strong:
-                    dir_col = ("#00ff88" if r["Direction"]=="UPTREND"
-                               else "#ff4455" if r["Direction"]=="DOWNTREND"
-                               else "#ffcc00")
-                    chg_col = "#00ff88" if r["Change%"] >= 0 else "#ff4455"
-                    arr     = "▲" if r["Change%"] >= 0 else "▼"
+                for r in strong_r:
+                    dir_col  = ("#16a34a"
+                                if r["Direction"]=="UPTREND"
+                                else "#dc2626")
+                    bg_light = ("#f0fdf4"
+                                if r["Direction"]=="UPTREND"
+                                else "#fef2f2")
+                    chg_col  = ("#16a34a"
+                                if r["Change%"] >= 0
+                                else "#dc2626")
+                    arr      = "▲" if r["Change%"]>=0 else "▼"
 
-                    rc1, rc2, rc3 = st.columns([3, 2, 1])
-                    with rc1:
-                        st.markdown(f"""
-                        <div style='background:#ffffff;border:1px solid #e2e8f0;
-                             border-radius:10px;padding:14px 18px'>
-                          <div style='display:flex;justify-content:space-between;
-                                      align-items:center'>
-                            <span style='font-size:16px;font-weight:700;
-                                         color:#1e293b'>{r['Stock']}</span>
-                            <span style='background:#dcfce7;color:{dir_col};
-                                         padding:3px 10px;border-radius:12px;
-                                         font-size:12px;font-weight:600'>
-                                {r['Action']}
-                            </span>
-                          </div>
-                          <div style='margin-top:6px;font-size:13px;color:#555'>
-                            Score
-                            <b style='color:{dir_col};font-size:18px'>
-                                {r['Score']}/10
-                            </b>
-                            &nbsp;|&nbsp;
-                            <span style='color:#1e293b'>₹{r['Price']:,.2f}</span>
-                            &nbsp;
-                            <span style='color:{chg_col}'>
-                                {arr}{abs(r['Change%']):.2f}%
-                            </span>
-                            &nbsp;|&nbsp;
-                            RSI <b style='color:#1e293b'>{r['RSI']:.0f}</b>
-                            &nbsp;|&nbsp;
-                            Vol {'✅' if r['VolSurge'] else '❌'}
-                          </div>
-                          <div style='margin-top:6px;font-size:12px;color:#444'>
-                            Entry ₹{r['EMA9']:,.2f} &nbsp;|&nbsp;
-                            SL ₹{r['SL']:,.2f} &nbsp;|&nbsp;
-                            T1 ₹{r['T1']:,.2f} &nbsp;|&nbsp;
-                            T2 ₹{r['T2']:,.2f}
-                          </div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                    # Main card
+                    st.markdown(
+                        f"<div style='background:#ffffff;"
+                        f"border:1.5px solid "
+                        f"{'#86efac' if r['Direction']=='UPTREND' else '#fca5a5'};"
+                        f"border-radius:12px;padding:16px 20px;"
+                        f"margin-bottom:8px;"
+                        f"box-shadow:0 2px 8px rgba(0,0,0,0.06)'>"
 
-                    with rc2:
-                        st.markdown(f"""
-                        <div style='background:#ffffff;border:1px solid #e2e8f0;
-                             border-radius:10px;padding:14px 18px;height:80px;
-                             display:flex;flex-direction:column;
-                             justify-content:center'>
-                          <div style='font-size:11px;color:#555'>
-                              DIRECTION
-                          </div>
-                          <div style='font-size:20px;font-weight:600;
-                                      color:{dir_col}'>
-                              {r['Direction']}
-                          </div>
-                          <div style='font-size:11px;color:#555'>
-                              ADX {r['ADX']:.0f}
-                          </div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        # Row 1: Name + Action + Reliability
+                        f"<div style='display:flex;"
+                        f"justify-content:space-between;"
+                        f"align-items:center;flex-wrap:wrap;gap:6px'>"
+                        f"<span style='font-size:18px;font-weight:700;"
+                        f"color:#1e293b'>{r['Stock']}</span>"
+                        f"<span style='background:{bg_light};"
+                        f"color:{dir_col};padding:4px 14px;"
+                        f"border-radius:20px;font-size:13px;"
+                        f"font-weight:700'>{r['Action']}</span>"
+                        f"<span style='font-size:12px;"
+                        f"color:#64748b'>{r['Reliability']}</span>"
+                        f"</div>"
 
-                    with rc3:
-                        if st.button(
-                            "Analyse",
-                            key=f"scan_an_{r['Stock']}",
-                            use_container_width=True
-                        ):
-                            st.session_state["sn"] = r["Stock"]
-                            st.session_state["st"] = r["Sym"]
-                            st.rerun()
+                        # Row 2: Scores
+                        f"<div style='margin:10px 0 8px;"
+                        f"display:flex;gap:20px;flex-wrap:wrap'>"
+                        f"<div><div style='font-size:10px;color:#94a3b8;"
+                        f"text-transform:uppercase;letter-spacing:0.5px'>"
+                        f"Signal Score</div>"
+                        f"<div style='font-size:22px;font-weight:700;"
+                        f"color:{dir_col}'>{r['Score']}/10</div></div>"
+                        f"<div><div style='font-size:10px;color:#94a3b8;"
+                        f"text-transform:uppercase;letter-spacing:0.5px'>"
+                        f"Combined Score</div>"
+                        f"<div style='font-size:22px;font-weight:700;"
+                        f"color:#1e293b'>{r['Combined']}/10</div></div>"
+                        f"<div><div style='font-size:10px;color:#94a3b8;"
+                        f"text-transform:uppercase;letter-spacing:0.5px'>"
+                        f"Consistency</div>"
+                        f"<div style='font-size:14px;font-weight:600;"
+                        f"color:#374151'>{r['Consist3']}/3 candles</div></div>"
+                        f"<div><div style='font-size:10px;color:#94a3b8;"
+                        f"text-transform:uppercase;letter-spacing:0.5px'>"
+                        f"R:R Ratio</div>"
+                        f"<div style='font-size:14px;font-weight:600;"
+                        f"color:#374151'>{r['RR']}:1</div></div>"
+                        f"</div>"
+
+                        # Row 3: Price info
+                        f"<div style='background:#f8fafc;"
+                        f"border-radius:8px;padding:10px 14px;"
+                        f"margin-bottom:10px;font-size:13px;"
+                        f"color:#475569'>"
+                        f"Price <b style='color:#1e293b'>"
+                        f"₹{r['Price']:,.2f}</b>"
+                        f"  <span style='color:{chg_col}'>"
+                        f"{arr}{abs(r['Change%']):.2f}%</span>"
+                        f"  &nbsp;|&nbsp;  RSI "
+                        f"<b style='color:#1e293b'>{r['RSI']:.0f}</b>"
+                        f"  &nbsp;|&nbsp;  ADX "
+                        f"<b style='color:#1e293b'>{r['ADX']:.0f}</b>"
+                        f"  &nbsp;|&nbsp;  Vol "
+                        f"{'✅' if r['VolSurge'] else '❌'}"
+                        f"</div>"
+
+                        # Row 4: Entry SL Targets
+                        f"<div style='display:grid;"
+                        f"grid-template-columns:repeat(5,1fr);"
+                        f"gap:8px;margin-bottom:10px'>"
+
+                        f"<div style='background:#f0fdf4;"
+                        f"border-radius:8px;padding:8px;text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b;"
+                        f"text-transform:uppercase'>Entry</div>"
+                        f"<div style='font-size:13px;font-weight:700;"
+                        f"color:#16a34a'>₹{r['Entry']:,.2f}</div>"
+                        f"<div style='font-size:10px;color:#94a3b8'>"
+                        f"EMA9 pullback</div></div>"
+
+                        f"<div style='background:#fef2f2;"
+                        f"border-radius:8px;padding:8px;text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b;"
+                        f"text-transform:uppercase'>Stop Loss</div>"
+                        f"<div style='font-size:13px;font-weight:700;"
+                        f"color:#dc2626'>₹{r['SL']:,.2f}</div>"
+                        f"<div style='font-size:10px;color:#94a3b8'>"
+                        f"ATR-based</div></div>"
+
+                        f"<div style='background:#eff6ff;"
+                        f"border-radius:8px;padding:8px;text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b;"
+                        f"text-transform:uppercase'>Target 1</div>"
+                        f"<div style='font-size:13px;font-weight:700;"
+                        f"color:#1d4ed8'>₹{r['T1']:,.2f}</div>"
+                        f"<div style='font-size:10px;color:#94a3b8'>"
+                        f"1.5× ATR</div></div>"
+
+                        f"<div style='background:#eff6ff;"
+                        f"border-radius:8px;padding:8px;text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b;"
+                        f"text-transform:uppercase'>Target 2</div>"
+                        f"<div style='font-size:13px;font-weight:700;"
+                        f"color:#1d4ed8'>₹{r['T2']:,.2f}</div>"
+                        f"<div style='font-size:10px;color:#94a3b8'>"
+                        f"2.5× ATR</div></div>"
+
+                        f"<div style='background:#eff6ff;"
+                        f"border-radius:8px;padding:8px;text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b;"
+                        f"text-transform:uppercase'>Target 3</div>"
+                        f"<div style='font-size:13px;font-weight:700;"
+                        f"color:#1d4ed8'>₹{r['T3']:,.2f}</div>"
+                        f"<div style='font-size:10px;color:#94a3b8'>"
+                        f"4× ATR</div></div>"
+
+                        f"</div>"
+
+                        # Row 5: Options ATM/ITM/OTM
+                        f"<div style='background:#faf5ff;"
+                        f"border-radius:8px;padding:10px 14px;"
+                        f"margin-bottom:10px'>"
+                        f"<div style='font-size:11px;color:#7c3aed;"
+                        f"font-weight:700;margin-bottom:6px'>"
+                        f"OPTIONS — {r['OptType']}</div>"
+                        f"<div style='display:flex;gap:16px;"
+                        f"flex-wrap:wrap;font-size:13px'>"
+                        f"<span><b style='color:#16a34a'>✅ ATM {r['ATM']}</b>"
+                        f" (Recommended)</span>"
+                        f"<span style='color:#475569'>ITM {r['ITM']}"
+                        f" (safer, costly)</span>"
+                        f"<span style='color:#94a3b8'>OTM {r['OTM']}"
+                        f" (risky, cheap)</span>"
+                        f"</div></div>"
+
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+
+                    # Analyse button below card
+                    if st.button(
+                        f"Deep Analyse {r['Stock']} →",
+                        key=f"scan_an_{r['Stock']}",
+                        type="primary",
+                        use_container_width=True
+                    ):
+                        st.session_state["sn"] = r["Stock"]
+                        st.session_state["st"] = r["Sym"]
+                        st.rerun()
 
                     st.markdown(
-                        "<div style='margin:4px 0'></div>",
+                        "<div style='margin:6px 0'></div>",
                         unsafe_allow_html=True
                     )
 
             # ── Good signals (6-7) ─────────────────────────
-            if good:
+            if good_r:
                 st.markdown("---")
-                st.markdown("### GOOD SIGNALS — Score 6–7")
-                st.caption("Worth watching — wait for score to reach 8")
-
-                cols_per_row = 3
-                for i in range(0, len(good), cols_per_row):
-                    chunk = good[i:i+cols_per_row]
-                    gcols = st.columns(cols_per_row)
-                    for ci, r in enumerate(chunk):
-                        dc = ("#00ff88" if r["Direction"]=="UPTREND"
-                              else "#ff4455" if r["Direction"]=="DOWNTREND"
-                              else "#ffcc00")
+                st.markdown(
+                    f"### 📈 GOOD SIGNALS — {len(good_r)} found"
+                )
+                st.caption(
+                    "Forming but not yet confirmed. "
+                    "Watch these — enter when score reaches 8."
+                )
+                cols_g = 2
+                for gi in range(0, len(good_r), cols_g):
+                    chunk_g = good_r[gi:gi+cols_g]
+                    gcols   = st.columns(cols_g)
+                    for ci, r in enumerate(chunk_g):
+                        dc = ("#16a34a"
+                              if r["Direction"]=="UPTREND"
+                              else "#dc2626")
                         with gcols[ci]:
-                            st.markdown(f"""
-                            <div style='background:#ffffff;
-                                 border:1px solid #e2e8f0;
-                                 border-radius:8px;padding:12px'>
-                              <div style='color:#1e293b;font-weight:500'>
-                                  {r['Stock']}
-                              </div>
-                              <div style='color:{dc};font-size:18px;
-                                          font-weight:600'>
-                                  {r['Score']}/10
-                              </div>
-                              <div style='font-size:12px;color:#555'>
-                                  {r['Action']} |
-                                  ₹{r['Price']:,.0f} |
-                                  RSI {r['RSI']:.0f}
-                              </div>
-                            </div>
-                            """, unsafe_allow_html=True)
+                            st.markdown(
+                                f"<div style='background:#ffffff;"
+                                f"border:1px solid #e2e8f0;"
+                                f"border-radius:10px;"
+                                f"padding:14px;margin-bottom:6px'>"
+                                f"<div style='display:flex;"
+                                f"justify-content:space-between;"
+                                f"align-items:center'>"
+                                f"<b style='color:#1e293b;font-size:15px'>"
+                                f"{r['Stock']}</b>"
+                                f"<span style='color:{dc};"
+                                f"font-weight:700;font-size:16px'>"
+                                f"{r['Score']}/10</span></div>"
+                                f"<div style='font-size:12px;"
+                                f"color:#64748b;margin-top:6px'>"
+                                f"{r['Action']} | ₹{r['Price']:,.2f} | "
+                                f"RSI {r['RSI']:.0f} | "
+                                f"R:R {r['RR']}:1</div>"
+                                f"<div style='font-size:11px;"
+                                f"color:#94a3b8;margin-top:4px'>"
+                                f"Entry ₹{r['Entry']:,.2f} | "
+                                f"SL ₹{r['SL']:,.2f}</div>"
+                                f"<div style='font-size:11px;"
+                                f"color:#7c3aed;margin-top:4px'>"
+                                f"{r['OptType']} ATM {r['ATM']}</div>"
+                                f"</div>",
+                                unsafe_allow_html=True
+                            )
                             if st.button(
                                 "View",
-                                key=f"scan_vw_{i}_{ci}",
+                                key=f"scan_vw_{gi}_{ci}",
                                 use_container_width=True
                             ):
                                 st.session_state["sn"] = r["Stock"]
                                 st.session_state["st"] = r["Sym"]
                                 st.rerun()
 
-            # ── Score bar chart ────────────────────────────
+            # ── Score chart ────────────────────────────────
             if results:
                 st.markdown("---")
-                st.markdown("### Score Overview — All Signals")
+                st.markdown("### Score Overview")
                 import plotly.graph_objects as go_scan
-                bar_colors = [
-                    "#00ff88" if r["Direction"]=="UPTREND"
-                    else "#ff4455" if r["Direction"]=="DOWNTREND"
-                    else "#ffcc00"
-                    for r in results
-                ]
+                results_sorted = sorted(
+                    results,
+                    key=lambda x: x["Combined"],
+                    reverse=True
+                )
                 fig_scan = go_scan.Figure(go_scan.Bar(
-                    x=[r["Stock"] for r in results],
-                    y=[r["Score"] for r in results],
-                    marker_color=bar_colors,
-                    text=[f"{r['Score']}/10" for r in results],
+                    x=[r["Stock"] for r in results_sorted],
+                    y=[r["Combined"] for r in results_sorted],
+                    marker_color=[
+                        "#16a34a" if r["Direction"]=="UPTREND"
+                        else "#dc2626"
+                        for r in results_sorted
+                    ],
+                    text=[
+                        f"{r['Combined']}/10"
+                        for r in results_sorted
+                    ],
                     textposition="outside",
-                    customdata=[[r["Action"],r["Price"]]
-                                for r in results],
                 ))
                 fig_scan.add_hline(
                     y=8, line_dash="dash",
-                    line_color="#00ff88",
+                    line_color="#16a34a",
                     annotation_text="Strong zone (8+)"
                 )
                 fig_scan.add_hline(
                     y=6, line_dash="dot",
-                    line_color="#ffcc00",
+                    line_color="#f59e0b",
                     annotation_text="Good zone (6+)"
                 )
                 fig_scan.update_layout(
                     template="plotly_white",
-                    height=350,
-                    yaxis_range=[0,11],
+                    height=320,
+                    yaxis_range=[0, 11],
                     margin=dict(l=10,r=10,t=20,b=80),
                     xaxis_tickangle=-35,
-                    showlegend=False
+                    showlegend=False,
+                    title="Combined Score (Technical 60% + Historical 40%)"
                 )
-                st.plotly_chart(fig_scan, use_container_width=True)
+                st.plotly_chart(
+                    fig_scan, use_container_width=True
+                )
 
-                # Full results table
+                # Full table
                 with st.expander("Full results table"):
-                    df_res = pd.DataFrame([{
-                        "Stock":     r["Stock"],
-                        "Score":     r["Score"],
-                        "Direction": r["Direction"],
-                        "Action":    r["Action"],
-                        "Price":     f"Rs{r['Price']:,.2f}",
-                        "RSI":       round(r["RSI"],1),
-                        "ADX":       round(r["ADX"],1),
-                        "Vol":       "Yes" if r["VolSurge"] else "No",
-                        "Entry":     f"Rs{r['EMA9']:,.2f}",
-                        "SL":        f"Rs{r['SL']:,.2f}",
-                        "T1":        f"Rs{r['T1']:,.2f}",
-                    } for r in results])
+                    df_scan = pd.DataFrame([{
+                        "Stock":       r["Stock"],
+                        "Score":       r["Score"],
+                        "Combined":    r["Combined"],
+                        "Reliability": r["Reliability"],
+                        "Action":      r["Action"],
+                        "Price":       f"₹{r['Price']:,.2f}",
+                        "Entry":       f"₹{r['Entry']:,.2f}",
+                        "SL":          f"₹{r['SL']:,.2f}",
+                        "T1":          f"₹{r['T1']:,.2f}",
+                        "T2":          f"₹{r['T2']:,.2f}",
+                        "R:R":         r["RR"],
+                        "ATM Strike":  r["ATM"],
+                        "ITM Strike":  r["ITM"],
+                        "OTM Strike":  r["OTM"],
+                        "RSI":         round(r["RSI"],1),
+                        "ADX":         round(r["ADX"],1),
+                        "Vol":  "✅" if r["VolSurge"] else "❌",
+                    } for r in results_sorted])
                     st.dataframe(
-                        df_res,
+                        df_scan,
                         use_container_width=True,
                         hide_index=True
                     )
-
         # Auto scan loop
         if auto_scan:
             st.info("Next scan in 5 minutes...")
@@ -2582,381 +2864,482 @@ with T3:
 with T4:
     st.markdown("### 🤖 ML Prediction Engine")
     st.caption(
-        "Trained on historical candle data using Random Forest + "
-        "Gradient Boosting. Predicts next 3-candle direction."
+        "Trained on historical candle data using "
+        "Random Forest + Gradient Boosting. "
+        "Predicts next 3-candle direction."
     )
 
-    if df.empty or len(df) < 100:
-        st.error(
-            "Need at least 100 candles for ML training. "
-            "Switch to **1d** timeframe."
+    # ── Stock info bar ─────────────────────────────────
+    ml_lp = live_price(stick)
+    pc_ml = "#16a34a" if ml_lp["chg"] >= 0 else "#dc2626"
+    arr_ml= "▲" if ml_lp["chg"] >= 0 else "▼"
+
+    if ml_lp["ok"]:
+        st.markdown(
+            f"<div style='background:#1e3a5f;"
+            f"border-radius:10px;padding:12px 18px;"
+            f"display:flex;justify-content:space-between;"
+            f"align-items:center;margin-bottom:12px'>"
+            f"<span style='color:#fff;font-size:16px;"
+            f"font-weight:700'>{sname}</span>"
+            f"<span style='color:#fff;font-size:18px;"
+            f"font-weight:700'>₹{ml_lp['p']:,.2f}</span>"
+            f"<span style='color:{pc_ml};font-weight:600'>"
+            f"{arr_ml}{abs(ml_lp['chg']):.2f}%</span>"
+            f"<span style='color:#93c5fd;font-size:12px'>"
+            f"{stick}</span>"
+            f"</div>",
+            unsafe_allow_html=True
         )
-    else:
-        # ── Real-time approximation ───────────────────────
-        st.markdown("### ⚡ Real-Time Approximation")
-        st.caption(
-            "Bridges the 15-minute data delay by injecting "
-            "the live price into indicator calculations."
+
+    # ── Controls ───────────────────────────────────────
+    ctl1, ctl2, ctl3 = st.columns([2, 2, 2])
+
+    with ctl1:
+        ml_tf_opt = st.selectbox(
+            "Timeframe",
+            ["15m", "30m", "1h", "1d"],
+            index=3,
+            key="ml_tf_select",
+            help="1d gives most candles = better accuracy"
         )
+    with ctl2:
+        run_ml = st.button(
+            "🚀 Train & Predict",
+            type="primary",
+            key="run_ml",
+            use_container_width=True
+        )
+    with ctl3:
+        # Clear old results when stock changes
+        if st.button(
+            "🔄 Reset",
+            key="ml_reset",
+            use_container_width=True,
+            help="Clear old results and start fresh"
+        ):
+            for k in ["ml_result","ml_model_data",
+                      "ml_stock","ml_tf"]:
+                st.session_state.pop(k, None)
+            st.rerun()
 
-        rt = approximate_realtime(df, lp["p"] if lp["ok"] else 0)
+    # Clear cached results if stock or timeframe changed
+    prev_stock = st.session_state.get("ml_stock", "")
+    prev_tf    = st.session_state.get("ml_tf", "")
+    if prev_stock != sname or prev_tf != ml_tf_opt:
+        for k in ["ml_result", "ml_model_data"]:
+            st.session_state.pop(k, None)
+        st.session_state["ml_stock"] = sname
+        st.session_state["ml_tf"]    = ml_tf_opt
 
-        if rt.get("ok"):
-            bias_col = rt["bias_color"]
+    # ── Load data and run ──────────────────────────────
+    if run_ml:
+        with st.spinner(
+            f"Loading {sname} candle data "
+            f"({ml_tf_opt} timeframe)..."
+        ):
+            ml_df = candles(stick, ml_tf_opt)
 
-            rt1, rt2, rt3 = st.columns(3)
-
-            with rt1:
-                st.markdown(f"""
-                <div style='background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.06)' style='border:2px solid {bias_col};
-                     text-align:center'>
-                  <div style='font-size:11px;color:#64748b;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px'>LIVE BIAS</div>
-                  <div style='font-size:36px;font-weight:700;
-                              color:{bias_col};line-height:1.1'>
-                      {rt["live_bias"]}
-                  </div>
-                  <div style='font-size:13px;color:#64748b;
-                              margin-top:6px'>
-                      {rt["bull_count"]} bull / {rt["bear_count"]} bear signals
-                  </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-            with rt2:
-                since_col = "#00ff88" if rt["since_close"] >= 0 else "#ff4455"
-                st.markdown(f"""
-                <div style='background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.06)'>
-                  <div style='font-size:11px;color:#64748b;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px'>LIVE vs LAST CANDLE</div>
-                  <div style='font-size:28px;font-weight:700;
-                              color:{since_col}'>
-                      {rt["since_close"]:+.3f}%
-                  </div>
-                  <div style='font-size:13px;color:#64748b;margin-top:6px'>
-                    Candle position: {rt["candle_pos"]:.0f}%
-                    ({rt["candle_zone"]})<br>
-                    Micro trend: <b style='color:#1e293b'>{rt["micro_trend"]}</b>
-                  </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-            with rt3:
-                st.markdown(f"""
-                <div style='background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.06)'>
-                  <div style='font-size:11px;color:#64748b;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px'>LIVE INDICATORS</div>
-                  <table style='width:100%;font-size:13px'>
-                    <tr><td style='color:#555'>Live RSI</td>
-                        <td style='text-align:right;color:#1e293b'>
-                            {rt["rsi_live"]}</td></tr>
-                    <tr><td style='color:#555'>Live EMA9</td>
-                        <td style='text-align:right;color:yellow'>
-                            ₹{rt["ema9_live"]:,}</td></tr>
-                    <tr><td style='color:#555'>Live EMA21</td>
-                        <td style='text-align:right;color:orange'>
-                            ₹{rt["ema21_live"]:,}</td></tr>
-                    <tr><td style='color:#555'>Live VWAP</td>
-                        <td style='text-align:right;color:#1e293b'>
-                            ₹{rt["vwap_live"]:,}</td></tr>
-                    <tr><td style='color:#555'>VWAP Dev</td>
-                        <td style='text-align:right;
-                            color:{"#00ff88" if rt["vwap_dev"]>0 else "#ff4455"}'>
-                            {rt["vwap_dev"]:+.2f}%</td></tr>
-                  </table>
-                </div>
-                """, unsafe_allow_html=True)
-
-            # Live signals list
-            st.markdown("#### 📡 Live Signal Breakdown")
-            for s in rt["live_signals"]:
-                col_ = ("#071407" if "✅" in s
-                        else "#140707" if "❌" in s
-                        else "#141007")
-                st.markdown(
-                    f"<div style='background:{col_};"
-                    f"border-radius:6px;padding:8px 14px;"
-                    f"margin:3px 0;font-size:13px;color:#ccc'>"
-                    f"{s}</div>",
-                    unsafe_allow_html=True
-                )
+        if ml_df.empty or len(ml_df) < 100:
+            st.error(
+                f"Only {len(ml_df)} candles available for "
+                f"{sname} on {ml_tf_opt}. "
+                f"Need at least 100. "
+                f"Switch to **1d** timeframe."
+            )
         else:
-            st.warning(
-                "Live price not available. "
-                "Real-time approximation disabled."
-            )
-
-        st.markdown("---")
-
-        # ── ML Training + Prediction ──────────────────────
-        st.markdown("### 🧠 ML Model Training & Prediction")
-
-        ml_col1, ml_col2 = st.columns([1, 2])
-
-        with ml_col1:
-            run_ml = st.button(
-                "🚀 Train & Predict",
-                type="primary",
-                key="run_ml",
-                use_container_width=True
-            )
             st.caption(
-                f"Will train on {len(df)} candles of "
-                f"{sname} history"
+                f"✅ {len(ml_df)} candles loaded | "
+                f"Last: "
+                f"{ml_df.index[-1].strftime('%d %b %H:%M')} "
+                f"IST | Timeframe: {ml_tf_opt}"
             )
 
-        with ml_col2:
-            st.info(
-                "Click **Train & Predict** to run the ML model. "
-                "Training takes 5–15 seconds. "
-                "Uses Random Forest + Gradient Boosting ensemble "
-                "trained on 30+ technical features."
+            # Real-time approximation
+            st.markdown("---")
+            st.markdown("#### ⚡ Real-Time Approximation")
+            st.caption(
+                "Live price injected into indicators "
+                "to bridge the 15-minute delay."
             )
 
-        if run_ml or "ml_result" in st.session_state:
-            if run_ml:
-                with st.spinner(
-                    "Training ML model on historical data..."
-                ):
-                    model_data = train_model(df)
-                    if model_data["ok"]:
-                        pred = predict_next_move(df, model_data)
-                        st.session_state["ml_result"]     = pred
-                        st.session_state["ml_model_data"] = model_data
-                    else:
-                        st.error(
-                            f"Training failed: {model_data.get('reason')}"
-                        )
-                        st.stop()
+            rt = approximate_realtime(
+                ml_df, ml_lp["p"] if ml_lp["ok"] else 0
+            )
 
-            pred       = st.session_state.get("ml_result", {})
-            model_data = st.session_state.get("ml_model_data", {})
+            if rt.get("ok"):
+                ra, rb, rc_ = st.columns(3)
+                bc = rt["bias_color"]
 
-            if pred and pred.get("ok"):
-                pc_   = pred["sig_color"]
-                conf  = pred["confidence"]
-
-                # ── Main prediction card ──────────────────
-                st.markdown(f"""
-                <div style='background:#f8fafc;
-                     border:2px solid {pc_};
-                     border-radius:14px;padding:24px;
-                     text-align:center;margin:12px 0'>
-                  <div style='font-size:12px;color:#64748b;
-                              letter-spacing:2px'>
-                      ML PREDICTION — NEXT 3 CANDLES
-                  </div>
-                  <div style='font-size:56px;font-weight:700;
-                              color:{pc_};line-height:1.1;
-                              margin:8px 0'>
-                      {pred["prediction"]}
-                  </div>
-                  <div style='font-size:26px;font-weight:600;
-                              color:{pc_}'>
-                      {pred["signal"]}
-                  </div>
-                  <div style='font-size:15px;color:#6b7280;
-                              margin-top:8px'>
-                      Confidence: {pred["reliability"]} ({conf}%)
-                  </div>
-                  <div style='margin-top:12px;
-                              display:flex;justify-content:center;
-                              gap:12px;flex-wrap:wrap'>
-                    <span style='background:#dcfce7;
-                         color:#00ff88;padding:4px 14px;
-                         border-radius:12px;font-size:13px'>
-                        📈 Uptrend: {pred["probabilities"].get("UPTREND",0):.1f}%
-                    </span>
-                    <span style='background:#fee2e2;
-                         color:#ff4455;padding:4px 14px;
-                         border-radius:12px;font-size:13px'>
-                        📉 Downtrend: {pred["probabilities"].get("DOWNTREND",0):.1f}%
-                    </span>
-                    <span style='background:#fef9c3;
-                         color:#ffcc00;padding:4px 14px;
-                         border-radius:12px;font-size:13px'>
-                        ➡️ Sideways: {pred["probabilities"].get("SIDEWAYS",0):.1f}%
-                    </span>
-                  </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                # Model stats
-                ms1, ms2, ms3 = st.columns(3)
-                ms1.metric(
-                    "Model Accuracy",
-                    f"{pred['model_accuracy']}%" if pred["model_accuracy"] else "N/A",
-                    help="Cross-validated accuracy on historical data"
-                )
-                ms2.metric(
-                    "Trained on",
-                    f"{pred['n_trained']} candles"
-                )
-                ms3.metric(
-                    "Timeframe",
-                    tf
-                )
-
-                # Probability bar chart
-                st.markdown("#### 📊 Probability Distribution")
-                probs = pred["probabilities"]
-                fig_prob = go.Figure(go.Bar(
-                    x=list(probs.keys()),
-                    y=list(probs.values()),
-                    marker_color=[
-                        "#00ff88" if k=="UPTREND"
-                        else "#ff4455" if k=="DOWNTREND"
-                        else "#ffcc00"
-                        for k in probs.keys()
-                    ],
-                    text=[f"{v:.1f}%" for v in probs.values()],
-                    textposition="outside"
-                ))
-                fig_prob.update_layout(
-                    template="plotly_white",
-                    height=280,
-                    yaxis_range=[0,100],
-                    yaxis_title="Probability %",
-                    margin=dict(l=10,r=10,t=10,b=10)
-                )
-                st.plotly_chart(fig_prob, use_container_width=True)
-
-                # Top features
-                st.markdown("#### 🔬 Top Contributing Features")
-                st.caption(
-                    "The 5 most important indicators the ML model "
-                    "used to make this prediction"
-                )
-                for feat in pred["top_contrib"]:
-                    imp  = feat["importance"]
-                    bar  = int(imp * 3)
-                    col_ = ("#00ff88" if imp >= 10
-                            else "#ffcc00" if imp >= 5
-                            else "#888")
-                    st.markdown(f"""
-                    <div style='background:#ffffff;
-                         border-radius:6px;padding:10px 14px;
-                         margin:4px 0'>
-                      <div style='display:flex;
-                                  justify-content:space-between'>
-                        <span style='color:#374151;font-size:13px'>
-                            {feat["feature"]}
-                        </span>
-                        <span style='color:{col_};font-size:13px;
-                                      font-weight:600'>
-                            {imp:.1f}% importance
-                        </span>
-                      </div>
-                      <div style='background:#f1f5f9;height:4px;
-                                  border-radius:2px;margin-top:6px'>
-                        <div style='background:{col_};
-                             width:{min(imp*5,100):.0f}%;
-                             height:4px;border-radius:2px'></div>
-                      </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                # Combined signal (ML + technical)
-                st.markdown("---")
-                st.markdown("### 🎯 Combined Signal (ML + Technical)")
-
-                ml_dir = pred["prediction"]
-                tech_dir = sig["direction"] if sig else "SIDEWAYS"
-                rt_bias  = rt.get("live_bias","NEUTRAL") if rt.get("ok") else "NEUTRAL"
-
-                agree_bull = (ml_dir=="UPTREND" and
-                              tech_dir=="UPTREND" and
-                              rt_bias=="BULLISH")
-                agree_bear = (ml_dir=="DOWNTREND" and
-                              tech_dir=="DOWNTREND" and
-                              rt_bias=="BEARISH")
-
-                if agree_bull:
-                    st.success(f"""
-                    🔥 **ALL THREE AGREE — BULLISH**
-
-                    ML Model: UPTREND ({conf}% confidence) ✅
-                    Technical Score: {sig["up_score"]}/10 ✅
-                    Live Bias: BULLISH ✅
-
-                    **This is the highest quality CE setup.**
-                    All three signal sources confirm uptrend.
-                    Enter on pullback to EMA9 (₹{sig["e9v"]:,})
-                    with SL below ₹{sig["sl_long"]:,}
-                    """)
-                elif agree_bear:
-                    st.error(f"""
-                    🔥 **ALL THREE AGREE — BEARISH**
-
-                    ML Model: DOWNTREND ({conf}% confidence) ✅
-                    Technical Score: {sig["dn_score"]}/10 ✅
-                    Live Bias: BEARISH ✅
-
-                    **This is the highest quality PE setup.**
-                    All three signal sources confirm downtrend.
-                    Enter on bounce to EMA9 (₹{sig["e9v"]:,})
-                    with SL above ₹{sig["sl_short"]:,}
-                    """)
-                elif ml_dir != "SIDEWAYS" and tech_dir != "SIDEWAYS":
-                    if ml_dir == tech_dir:
-                        col_ = "#00ff88" if ml_dir=="UPTREND" else "#ff4455"
-                        st.markdown(f"""
-                        <div style='background:#fffbeb;border:1.5px solid #ffcc00;border-radius:10px;padding:18px;margin:6px 0'>
-                          <b style='color:{col_}'>
-                              ⚡ ML + Technical agree: {ml_dir}
-                          </b><br>
-                          <span style='color:#6b7280;font-size:13px'>
-                              Live bias is {rt_bias} — wait for it to confirm
-                              before entering.
-                          </span>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        st.warning(
-                            f"⚠️ **Mixed signals** — "
-                            f"ML says {ml_dir} but "
-                            f"technical says {tech_dir}. "
-                            "Do not trade when signals conflict."
-                        )
-                else:
-                    st.warning(
-                        "⏳ **No clear combined signal** — "
-                        "At least one model shows SIDEWAYS. "
-                        "Wait for alignment."
+                with ra:
+                    bias_bg = (
+                        "#f0fdf4" if rt["live_bias"]=="BULLISH"
+                        else "#fef2f2"
+                        if rt["live_bias"]=="BEARISH"
+                        else "#fffbeb"
+                    )
+                    st.markdown(
+                        f"<div style='background:{bias_bg};"
+                        f"border-radius:10px;padding:16px;"
+                        f"text-align:center'>"
+                        f"<div style='font-size:11px;"
+                        f"color:#64748b;text-transform:uppercase;"
+                        f"letter-spacing:1px'>Live Bias</div>"
+                        f"<div style='font-size:28px;"
+                        f"font-weight:700;color:{bc}'>"
+                        f"{rt['live_bias']}</div>"
+                        f"<div style='font-size:12px;"
+                        f"color:#64748b;margin-top:4px'>"
+                        f"{rt['bull_count']} bull / "
+                        f"{rt['bear_count']} bear</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
                     )
 
-                with st.expander("📖 How to use ML predictions"):
-                    st.markdown("""
-                    ### How the ML model works
+                with rb:
+                    sc_col = (
+                        "#16a34a"
+                        if rt["since_close"] >= 0
+                        else "#dc2626"
+                    )
+                    st.markdown(
+                        f"<div style='background:#f8fafc;"
+                        f"border-radius:10px;padding:16px;"
+                        f"text-align:center'>"
+                        f"<div style='font-size:11px;"
+                        f"color:#64748b;text-transform:uppercase;"
+                        f"letter-spacing:1px'>"
+                        f"Live vs Last Candle</div>"
+                        f"<div style='font-size:28px;"
+                        f"font-weight:700;color:{sc_col}'>"
+                        f"{rt['since_close']:+.3f}%</div>"
+                        f"<div style='font-size:12px;"
+                        f"color:#64748b;margin-top:4px'>"
+                        f"Candle pos: {rt['candle_pos']:.0f}% "
+                        f"({rt['candle_zone']})<br>"
+                        f"Micro trend: "
+                        f"<b>{rt['micro_trend']}</b></div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
 
-                    The model is trained on YOUR stock's own
-                    historical data — not generic data.
-                    It learns the specific patterns of that
-                    stock by analyzing 30+ technical features
-                    including RSI, MACD, EMA ratios, volume
-                    patterns, Bollinger Band position,
-                    Stochastic, Williams %R and more.
+                with rc_:
+                    st.markdown(
+                        f"<div style='background:#f8fafc;"
+                        f"border-radius:10px;padding:16px'>"
+                        f"<div style='font-size:11px;"
+                        f"color:#64748b;text-transform:uppercase;"
+                        f"letter-spacing:1px;margin-bottom:8px'>"
+                        f"Live Indicators</div>"
+                        f"<table style='width:100%;"
+                        f"font-size:13px'>"
+                        f"<tr><td style='color:#64748b'>"
+                        f"RSI</td><td style='text-align:right;"
+                        f"font-weight:600;color:#1e293b'>"
+                        f"{rt['rsi_live']}</td></tr>"
+                        f"<tr><td style='color:#64748b'>"
+                        f"EMA9</td><td style='text-align:right;"
+                        f"font-weight:600;color:#ca8a04'>"
+                        f"₹{rt['ema9_live']:,}</td></tr>"
+                        f"<tr><td style='color:#64748b'>"
+                        f"EMA21</td><td style='text-align:right;"
+                        f"font-weight:600;color:#ea580c'>"
+                        f"₹{rt['ema21_live']:,}</td></tr>"
+                        f"<tr><td style='color:#64748b'>"
+                        f"VWAP</td><td style='text-align:right;"
+                        f"font-weight:600;color:#1e293b'>"
+                        f"₹{rt['vwap_live']:,}</td></tr>"
+                        f"<tr><td style='color:#64748b'>"
+                        f"VWAP Dev</td>"
+                        f"<td style='text-align:right;"
+                        f"font-weight:600;"
+                        f"color:{'#16a34a' if rt['vwap_dev']>0 else '#dc2626'}'>"
+                        f"{rt['vwap_dev']:+.2f}%</td></tr>"
+                        f"</table></div>",
+                        unsafe_allow_html=True
+                    )
 
-                    ### Three levels of confirmation
+                # Live signals
+                st.markdown("#### 📡 Live Signal Breakdown")
+                for sig_txt in rt["live_signals"]:
+                    c_ = ("#f0fdf4" if "✅" in sig_txt
+                          else "#fef2f2" if "❌" in sig_txt
+                          else "#fffbeb")
+                    st.markdown(
+                        f"<div style='background:{c_};"
+                        f"border-radius:6px;padding:8px 14px;"
+                        f"margin:3px 0;font-size:13px;"
+                        f"color:#374151'>{sig_txt}</div>",
+                        unsafe_allow_html=True
+                    )
 
-                    | Level | Condition | Action |
-                    |-------|-----------|--------|
-                    | **Highest** | ML + Technical + Live all agree | Enter trade |
-                    | **Good** | ML + Technical agree | Wait for live bias to confirm |
-                    | **Avoid** | ML and Technical disagree | Do not trade |
+            # ML training
+            st.markdown("---")
+            st.markdown("#### 🧠 ML Prediction")
 
-                    ### Model accuracy guide
+            with st.spinner(
+                "Training Random Forest + "
+                "Gradient Boosting model..."
+            ):
+                model_data = train_model(ml_df)
 
-                    | Accuracy | Meaning |
-                    |----------|---------|
-                    | > 65% | Strong — trust the signal |
-                    | 55–65% | Moderate — use with technical confirmation |
-                    | < 55% | Weak — rely more on technical signals |
+            if not model_data.get("ok"):
+                st.error(
+                    f"Training failed: "
+                    f"{model_data.get('reason','Unknown error')}"
+                )
+            else:
+                pred = predict_next_move(ml_df, model_data)
+                st.session_state["ml_result"]     = pred
+                st.session_state["ml_model_data"] = model_data
 
-                    ### Important limitations
+                if pred and pred.get("ok"):
+                    pc_   = pred["sig_color"]
+                    conf  = pred["confidence"]
 
-                    - ML predicts probability, not certainty
-                    - Always use stop loss regardless of ML signal
-                    - Retrain the model daily for fresh predictions
-                    - Works best on 1d timeframe with 300+ candles
-                    """)
+                    # Prediction card
+                    pred_bg = (
+                        "#f0fdf4" if pred["prediction"]=="UPTREND"
+                        else "#fef2f2"
+                        if pred["prediction"]=="DOWNTREND"
+                        else "#fffbeb"
+                    )
+                    st.markdown(
+                        f"<div style='background:{pred_bg};"
+                        f"border:2px solid {pc_};"
+                        f"border-radius:14px;padding:24px;"
+                        f"text-align:center;margin:12px 0'>"
+                        f"<div style='font-size:12px;"
+                        f"color:#64748b;letter-spacing:2px;"
+                        f"text-transform:uppercase'>"
+                        f"ML PREDICTION — NEXT 3 CANDLES</div>"
+                        f"<div style='font-size:52px;"
+                        f"font-weight:700;color:{pc_};"
+                        f"line-height:1.1;margin:8px 0'>"
+                        f"{pred['prediction']}</div>"
+                        f"<div style='font-size:26px;"
+                        f"font-weight:600;color:{pc_}'>"
+                        f"{pred['signal']}</div>"
+                        f"<div style='font-size:15px;"
+                        f"color:#64748b;margin-top:8px'>"
+                        f"Confidence: {pred['reliability']} "
+                        f"({conf}%)</div>"
+                        f"<div style='margin-top:12px;"
+                        f"display:flex;justify-content:center;"
+                        f"gap:12px;flex-wrap:wrap'>"
+                        f"<span style='background:#dcfce7;"
+                        f"color:#16a34a;padding:4px 14px;"
+                        f"border-radius:12px;font-size:13px'>"
+                        f"📈 Uptrend: "
+                        f"{pred['probabilities'].get('UPTREND',0):.1f}%"
+                        f"</span>"
+                        f"<span style='background:#fee2e2;"
+                        f"color:#dc2626;padding:4px 14px;"
+                        f"border-radius:12px;font-size:13px'>"
+                        f"📉 Downtrend: "
+                        f"{pred['probabilities'].get('DOWNTREND',0):.1f}%"
+                        f"</span>"
+                        f"<span style='background:#fef9c3;"
+                        f"color:#854d0e;padding:4px 14px;"
+                        f"border-radius:12px;font-size:13px'>"
+                        f"➡️ Sideways: "
+                        f"{pred['probabilities'].get('SIDEWAYS',0):.1f}%"
+                        f"</span>"
+                        f"</div></div>",
+                        unsafe_allow_html=True
+                    )
+
+                    # Stats
+                    ms1, ms2, ms3 = st.columns(3)
+                    ms1.metric(
+                        "Model Accuracy",
+                        f"{pred['model_accuracy']}%"
+                        if pred["model_accuracy"] else "N/A"
+                    )
+                    ms2.metric(
+                        "Trained on",
+                        f"{pred['n_trained']} candles"
+                    )
+                    ms3.metric("Timeframe", ml_tf_opt)
+
+                    # Probability chart
+                    st.markdown("#### 📊 Probability Distribution")
+                    probs = pred["probabilities"]
+                    import plotly.graph_objects as go_ml
+                    fig_prob = go_ml.Figure(go_ml.Bar(
+                        x=list(probs.keys()),
+                        y=list(probs.values()),
+                        marker_color=[
+                            "#16a34a" if k=="UPTREND"
+                            else "#dc2626" if k=="DOWNTREND"
+                            else "#f59e0b"
+                            for k in probs.keys()
+                        ],
+                        text=[f"{v:.1f}%" for v in probs.values()],
+                        textposition="outside"
+                    ))
+                    fig_prob.update_layout(
+                        template="plotly_white",
+                        height=260,
+                        yaxis_range=[0, 100],
+                        yaxis_title="Probability %",
+                        margin=dict(l=10,r=10,t=10,b=10)
+                    )
+                    st.plotly_chart(
+                        fig_prob, use_container_width=True
+                    )
+
+                    # Top features
+                    st.markdown("#### 🔬 Top Features Used")
+                    for feat in pred["top_contrib"]:
+                        imp = feat["importance"]
+                        fc  = ("#16a34a" if imp >= 10
+                               else "#f59e0b" if imp >= 5
+                               else "#94a3b8")
+                        st.markdown(
+                            f"<div style='background:#f8fafc;"
+                            f"border-radius:6px;padding:10px 14px;"
+                            f"margin:4px 0'>"
+                            f"<div style='display:flex;"
+                            f"justify-content:space-between'>"
+                            f"<span style='color:#475569;"
+                            f"font-size:13px'>{feat['feature']}"
+                            f"</span>"
+                            f"<span style='color:{fc};"
+                            f"font-size:13px;font-weight:600'>"
+                            f"{imp:.1f}% importance</span></div>"
+                            f"<div style='background:#e2e8f0;"
+                            f"height:4px;border-radius:2px;"
+                            f"margin-top:6px'>"
+                            f"<div style='background:{fc};"
+                            f"width:{min(imp*5,100):.0f}%;"
+                            f"height:4px;border-radius:2px'>"
+                            f"</div></div></div>",
+                            unsafe_allow_html=True
+                        )
+
+                    # Combined signal
+                    st.markdown("---")
+                    st.markdown("### 🎯 Combined Signal")
+
+                    ml_dir   = pred["prediction"]
+                    tech_sig = compute_all(ml_df, ml_lp)
+                    tech_dir = (tech_sig["direction"]
+                                if tech_sig else "SIDEWAYS")
+                    rt_bias  = (rt.get("live_bias","NEUTRAL")
+                                if rt and rt.get("ok")
+                                else "NEUTRAL")
+
+                    all_bull = (
+                        ml_dir   == "UPTREND" and
+                        tech_dir == "UPTREND" and
+                        rt_bias  == "BULLISH"
+                    )
+                    all_bear = (
+                        ml_dir   == "DOWNTREND" and
+                        tech_dir == "DOWNTREND" and
+                        rt_bias  == "BEARISH"
+                    )
+
+                    if all_bull and tech_sig:
+                        st.success(
+                            f"🔥 ALL THREE AGREE — BULLISH\n\n"
+                            f"ML: UPTREND ({conf}%) ✅ | "
+                            f"Technical: {tech_sig['up_score']}/10 ✅ | "
+                            f"Live: BULLISH ✅\n\n"
+                            f"Highest quality CE setup. "
+                            f"Enter on pullback to "
+                            f"EMA9 (₹{tech_sig['e9v']:,}) "
+                            f"with SL ₹{tech_sig['sl_long']:,}"
+                        )
+                    elif all_bear and tech_sig:
+                        st.error(
+                            f"🔥 ALL THREE AGREE — BEARISH\n\n"
+                            f"ML: DOWNTREND ({conf}%) ✅ | "
+                            f"Technical: {tech_sig['dn_score']}/10 ✅ | "
+                            f"Live: BEARISH ✅\n\n"
+                            f"Highest quality PE setup. "
+                            f"Enter on bounce to "
+                            f"EMA9 (₹{tech_sig['e9v']:,}) "
+                            f"with SL ₹{tech_sig['sl_short']:,}"
+                        )
+                    elif ml_dir == tech_dir and ml_dir != "SIDEWAYS":
+                        col_ = ("#16a34a"
+                                if ml_dir == "UPTREND"
+                                else "#dc2626")
+                        st.markdown(
+                            f"<div style='background:#f8fafc;"
+                            f"border:1px solid #e2e8f0;"
+                            f"border-radius:10px;"
+                            f"padding:14px 18px'>"
+                            f"<b style='color:{col_}'>"
+                            f"⚡ ML + Technical agree: {ml_dir}"
+                            f"</b><br>"
+                            f"<span style='color:#64748b;"
+                            f"font-size:13px'>"
+                            f"Live bias is {rt_bias}. "
+                            f"Wait for it to confirm "
+                            f"before entering.</span></div>",
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        st.warning(
+                            f"⚠️ Mixed signals — "
+                            f"ML says {ml_dir} but "
+                            f"Technical says {tech_dir}. "
+                            "Do not trade when signals conflict."
+                        )
+
+    elif "ml_result" in st.session_state:
+        # Show cached result with note
+        st.info(
+            f"Showing previous result for "
+            f"{st.session_state.get('ml_stock', sname)}. "
+            f"Click **Train & Predict** to get fresh prediction "
+            f"for {sname}."
+        )
+        pred = st.session_state["ml_result"]
+        if pred and pred.get("ok"):
+            pc_ = pred["sig_color"]
+            st.markdown(
+                f"<div style='background:#f8fafc;"
+                f"border:2px solid {pc_};"
+                f"border-radius:12px;padding:20px;"
+                f"text-align:center'>"
+                f"<div style='font-size:42px;font-weight:700;"
+                f"color:{pc_}'>{pred['prediction']}</div>"
+                f"<div style='font-size:20px;color:{pc_}'>"
+                f"{pred['signal']}</div>"
+                f"<div style='font-size:14px;color:#64748b;"
+                f"margin-top:6px'>"
+                f"Confidence: {pred['confidence']}%</div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+    else:
+        st.info(
+            f"Stock selected: **{sname}**  \n\n"
+            f"Click **🚀 Train & Predict** above to run "
+            f"the ML model and get a prediction."
+        )
+
+        with st.expander("📖 How ML prediction works"):
+            st.markdown("""
+            The model trains on YOUR stock's own historical
+            data — not generic market data. It learns the
+            specific patterns of that stock by analyzing
+            30+ technical features.
+
+            | Level | Condition | Action |
+            |-------|-----------|--------|
+            | **Best** | ML + Technical + Live agree | Enter trade |
+            | **Good** | ML + Technical agree | Wait for live |
+            | **Avoid** | ML and Technical disagree | No trade |
+
+            **Use 1d timeframe** for best accuracy —
+            more candles = better trained model.
+            """)
+
 
 with T5:
     st.markdown("### 🏦 Smart Money & Institutional Analysis")
@@ -3524,1344 +3907,6 @@ with T7:
 # ╔══════════════════════════════════════════════════════╗
 # ║  TAB 8 — PAPER TRADING                              ║
 # ╚══════════════════════════════════════════════════════╝
-with T8:
-    st.markdown("### 📝 Paper Trading — Practice Without Real Money")
-    st.caption(
-        "Record virtual trades based on your terminal signals. "
-        "Track your win rate, P&L and learn before using real money."
-    )
-
-    # ── Initialise session state ───────────────────────
-    if "pt_trades" not in st.session_state:
-        st.session_state["pt_trades"] = []
-    if "pt_capital" not in st.session_state:
-        st.session_state["pt_capital"] = 100000.0
-
-    trades = st.session_state["pt_trades"]
-
-    # ── Capital setup ──────────────────────────────────
-    with st.expander("Capital & Settings", expanded=len(trades)==0):
-        cap_col1, cap_col2 = st.columns(2)
-        with cap_col1:
-            capital = st.number_input(
-                "Starting capital (Rs)",
-                value=float(st.session_state["pt_capital"]),
-                step=10000.0,
-                min_value=10000.0,
-                key="pt_capital_input"
-            )
-            st.session_state["pt_capital"] = capital
-        with cap_col2:
-            st.info(
-                "Start with Rs 1,00,000 virtual money. "
-                "Trade as if it were real. "
-                "Never risk more than 2% per trade."
-            )
-        max_risk = round(capital * 0.02, 0)
-        st.markdown(
-            f"Max risk per trade (2%): "
-            f"**Rs {max_risk:,.0f}**"
-        )
-
-    st.markdown("---")
-
-    # ── Add new trade ──────────────────────────────────
-    st.markdown("#### Add a Paper Trade")
-    st.caption(
-        "When your terminal gives a signal, record it here "
-        "before entering. Fill in exactly what the terminal shows."
-    )
-
-    nc1, nc2, nc3 = st.columns(3)
-    with nc1:
-        pt_stock = st.text_input(
-            "Stock / Index",
-            placeholder="e.g. NIFTY 50, HDFC Bank",
-            key="pt_stock"
-        )
-        pt_type = st.selectbox(
-            "Trade type",
-            ["CE (Call)", "PE (Put)", "Intraday Buy", "Intraday Sell"],
-            key="pt_type"
-        )
-        pt_signal = st.slider(
-            "Signal score at entry",
-            0, 10, 7,
-            key="pt_signal"
-        )
-    with nc2:
-        pt_entry = st.number_input(
-            "Entry price (Rs)",
-            value=0.0, step=0.5,
-            min_value=0.0,
-            key="pt_entry"
-        )
-        pt_sl = st.number_input(
-            "Stop loss (Rs)",
-            value=0.0, step=0.5,
-            min_value=0.0,
-            key="pt_sl"
-        )
-        pt_target = st.number_input(
-            "Target 1 (Rs)",
-            value=0.0, step=0.5,
-            min_value=0.0,
-            key="pt_target"
-        )
-    with nc3:
-        pt_qty = st.number_input(
-            "Quantity / Lots",
-            value=1, step=1,
-            min_value=1,
-            key="pt_qty"
-        )
-        pt_date = st.date_input(
-            "Trade date",
-            value=now_ist().date(),
-            key="pt_date"
-        )
-        pt_notes = st.text_area(
-            "Notes (why did you enter?)",
-            placeholder="Signal score 8, RSI 61, Vol surge, EMA9 pullback...",
-            height=80,
-            key="pt_notes"
-        )
-
-    if st.button(
-        "Record Trade",
-        type="primary",
-        key="pt_add",
-        use_container_width=True
-    ):
-        if pt_stock and pt_entry > 0 and pt_sl > 0:
-            risk_per_unit = abs(pt_entry - pt_sl)
-            total_risk    = risk_per_unit * pt_qty
-            rr = round(
-                abs(pt_target - pt_entry) /
-                (risk_per_unit + 0.001), 2
-            ) if pt_target > 0 else 0
-
-            trade = {
-                "id":       len(trades) + 1,
-                "date":     str(pt_date),
-                "stock":    pt_stock,
-                "type":     pt_type,
-                "score":    pt_signal,
-                "entry":    pt_entry,
-                "sl":       pt_sl,
-                "target":   pt_target,
-                "qty":      pt_qty,
-                "risk":     round(total_risk, 2),
-                "rr":       rr,
-                "notes":    pt_notes,
-                "status":   "OPEN",
-                "exit":     0.0,
-                "pnl":      0.0,
-                "result":   "",
-            }
-            trades.append(trade)
-            st.session_state["pt_trades"] = trades
-            st.success(
-                f"Trade recorded: {pt_stock} {pt_type} "
-                f"@ Rs{pt_entry} | "
-                f"Risk: Rs{total_risk:,.0f} | "
-                f"R:R {rr}:1"
-            )
-            if total_risk > capital * 0.02:
-                st.warning(
-                    f"Risk Rs{total_risk:,.0f} exceeds 2% rule "
-                    f"(Rs{capital*0.02:,.0f}). "
-                    "Consider reducing quantity."
-                )
-        else:
-            st.error(
-                "Please fill stock name, entry price and stop loss."
-            )
-
-    st.markdown("---")
-
-    # ── Open trades ────────────────────────────────────
-    open_trades = [t for t in trades if t["status"] == "OPEN"]
-    if open_trades:
-        st.markdown(f"#### Open Trades ({len(open_trades)})")
-        for t in open_trades:
-            oc1, oc2, oc3, oc4 = st.columns([3,2,2,1])
-            with oc1:
-                st.markdown(
-                    f"**{t['stock']}** {t['type']} | "
-                    f"Entry Rs{t['entry']:,.2f} | "
-                    f"SL Rs{t['sl']:,.2f} | "
-                    f"Score {t['score']}/10"
-                )
-            with oc2:
-                lp_pt = live_price(STOCKS.get(t["stock"], ""))
-                if lp_pt["ok"]:
-                    cur = lp_pt["p"]
-                    unreal = round(
-                        (cur - t["entry"]) * t["qty"]
-                        if "Buy" in t["type"] or "CE" in t["type"]
-                        else (t["entry"] - cur) * t["qty"], 2
-                    )
-                    col_ = "#00ff88" if unreal >= 0 else "#ff4455"
-                    st.markdown(
-                        f"Live Rs{cur:,} | "
-                        f"<span style='color:{col_}'>"
-                        f"Unrealised Rs{unreal:+,.0f}</span>",
-                        unsafe_allow_html=True
-                    )
-            with oc3:
-                exit_price = st.number_input(
-                    "Exit at Rs",
-                    value=0.0, step=0.5,
-                    key=f"exit_{t['id']}",
-                    label_visibility="collapsed"
-                )
-            with oc4:
-                if st.button(
-                    "Close",
-                    key=f"close_{t['id']}",
-                    type="primary"
-                ):
-                    if exit_price > 0:
-                        if "Buy" in t["type"] or "CE" in t["type"]:
-                            pnl = round(
-                                (exit_price - t["entry"]) * t["qty"], 2
-                            )
-                        else:
-                            pnl = round(
-                                (t["entry"] - exit_price) * t["qty"], 2
-                            )
-                        result = "WIN" if pnl > 0 else "LOSS"
-                        for tr in st.session_state["pt_trades"]:
-                            if tr["id"] == t["id"]:
-                                tr["status"] = "CLOSED"
-                                tr["exit"]   = exit_price
-                                tr["pnl"]    = pnl
-                                tr["result"] = result
-                        st.rerun()
-                    else:
-                        st.error("Enter exit price first")
-        st.markdown("---")
-
-    # ── Performance dashboard ──────────────────────────
-    closed = [t for t in trades if t["status"] == "CLOSED"]
-
-    if closed:
-        st.markdown("#### Performance Dashboard")
-
-        total_pnl  = sum(t["pnl"] for t in closed)
-        wins       = [t for t in closed if t["result"] == "WIN"]
-        losses     = [t for t in closed if t["result"] == "LOSS"]
-        win_rate   = round(len(wins)/len(closed)*100, 1)
-        avg_win    = round(
-            sum(t["pnl"] for t in wins)/len(wins), 2
-        ) if wins else 0
-        avg_loss   = round(
-            sum(t["pnl"] for t in losses)/len(losses), 2
-        ) if losses else 0
-        expectancy = round(
-            (win_rate/100 * avg_win) +
-            ((1-win_rate/100) * avg_loss), 2
-        )
-        profit_factor = round(
-            sum(t["pnl"] for t in wins) /
-            abs(sum(t["pnl"] for t in losses) + 0.001), 2
-        ) if losses else 999
-
-        # Metrics row
-        pm1,pm2,pm3,pm4,pm5,pm6 = st.columns(6)
-        pnl_col = "normal" if total_pnl >= 0 else "inverse"
-        pm1.metric("Total P&L",
-                   f"Rs{total_pnl:+,.0f}",
-                   delta_color=pnl_col)
-        pm2.metric("Win Rate",   f"{win_rate}%")
-        pm3.metric("Trades",     len(closed))
-        pm4.metric("Avg Win",    f"Rs{avg_win:+,.0f}")
-        pm5.metric("Avg Loss",   f"Rs{avg_loss:+,.0f}")
-        pm6.metric("Profit Factor", f"{profit_factor}")
-
-        # Capital curve
-        import plotly.graph_objects as go_pt
-        running = capital
-        curve_x = ["Start"]
-        curve_y = [capital]
-        for t in sorted(closed, key=lambda x: x["date"]):
-            running += t["pnl"]
-            curve_x.append(f"#{t['id']} {t['stock'][:8]}")
-            curve_y.append(round(running, 2))
-
-        fig_curve = go_pt.Figure()
-        fig_curve.add_trace(go_pt.Scatter(
-            x=curve_x, y=curve_y,
-            mode="lines+markers",
-            line=dict(
-                color="#00ff88" if curve_y[-1] >= capital
-                else "#ff4455",
-                width=2
-            ),
-            marker=dict(size=6),
-            fill="tozeroy",
-            fillcolor="rgba(0,255,136,0.05)"
-            if curve_y[-1] >= capital
-            else "rgba(255,68,85,0.05)",
-            name="Capital"
-        ))
-        fig_curve.add_hline(
-            y=capital,
-            line_dash="dash",
-            line_color="white",
-            opacity=0.3,
-            annotation_text="Starting capital"
-        )
-        fig_curve.update_layout(
-            template="plotly_white",
-            height=280,
-            margin=dict(l=10,r=10,t=20,b=60),
-            xaxis_tickangle=-30,
-            yaxis_title="Capital Rs",
-            title="Capital curve — how your account grew trade by trade"
-        )
-        st.plotly_chart(fig_curve, use_container_width=True)
-
-        # Signal score analysis
-        st.markdown("#### Signal Score vs Result")
-        score_win  = [t["score"] for t in wins]
-        score_loss = [t["score"] for t in losses]
-
-        if score_win or score_loss:
-            fig_sc = go_pt.Figure()
-            if score_win:
-                fig_sc.add_trace(go_pt.Box(
-                    y=score_win,
-                    name="Winning trades",
-                    marker_color="#00ff88",
-                    boxmean=True
-                ))
-            if score_loss:
-                fig_sc.add_trace(go_pt.Box(
-                    y=score_loss,
-                    name="Losing trades",
-                    marker_color="#ff4455",
-                    boxmean=True
-                ))
-            fig_sc.update_layout(
-                template="plotly_white",
-                height=260,
-                margin=dict(l=10,r=10,t=20,b=10),
-                yaxis_title="Signal score",
-                yaxis_range=[0,11],
-                title=(
-                    "Were higher-score trades more profitable? "
-                    "This tells you if the signal works."
-                )
-            )
-            st.plotly_chart(fig_sc, use_container_width=True)
-
-        # Expectancy insight
-        st.markdown("#### What your numbers tell you")
-        if win_rate >= 50 and profit_factor >= 1.5:
-            st.success(
-                f"Win rate {win_rate}% and profit factor "
-                f"{profit_factor} — your system is working. "
-                "You are ready to try small real money."
-            )
-        elif win_rate >= 40 and profit_factor >= 1.0:
-            st.warning(
-                f"Win rate {win_rate}% with profit factor "
-                f"{profit_factor}. "
-                "Getting better. Keep paper trading. "
-                "Target 50%+ win rate before going live."
-            )
-        else:
-            st.error(
-                f"Win rate {win_rate}%. "
-                "The system needs more work before real money. "
-                "Review your losing trades — were you following "
-                "all 11 checklist rules?"
-            )
-
-        if expectancy > 0:
-            st.info(
-                f"Expectancy: Rs{expectancy:+.2f} per trade. "
-                "This means on average each trade makes you "
-                f"Rs{abs(expectancy):.0f}. "
-                "Positive expectancy is the goal."
-            )
-
-        # Closed trades table
-        with st.expander("All closed trades"):
-            df_pt = pd.DataFrame([{
-                "Date":   t["date"],
-                "Stock":  t["stock"],
-                "Type":   t["type"],
-                "Score":  t["score"],
-                "Entry":  f"Rs{t['entry']:,.2f}",
-                "Exit":   f"Rs{t['exit']:,.2f}",
-                "P&L":    f"Rs{t['pnl']:+,.0f}",
-                "Result": t["result"],
-                "R:R":    t["rr"],
-                "Notes":  t["notes"][:30] if t["notes"] else "",
-            } for t in closed])
-            st.dataframe(
-                df_pt,
-                use_container_width=True,
-                hide_index=True
-            )
-
-    elif trades:
-        st.info("Close your open trades to see performance analytics.")
-    else:
-        st.markdown("""
-        ### How to use paper trading
-
-        Paper trading means making pretend trades with virtual
-        money to practise before risking real capital.
-
-        **Your daily routine:**
-
-        1. Open the Trade Setup tab as normal
-        2. When you see a signal (score 7+, 9+ checks green)
-           record it here instead of your broker app
-        3. Enter the exact entry, stop loss and target
-           shown by your terminal
-        4. When the trade closes (SL hit or target reached),
-           come back and record the exit price
-        5. Watch your win rate and capital curve build up
-
-        **When are you ready for real money?**
-
-        | Metric | Target before going live |
-        |--------|--------------------------|
-        | Win rate | 45% or above |
-        | Profit factor | 1.5 or above |
-        | Trades completed | At least 20 |
-        | Followed all 11 rules | Every single trade |
-        | Consistent for weeks | 3+ weeks |
-
-        Most successful traders paper trade for 1 to 3 months
-        before using real money. The discipline you build
-        here is worth more than any indicator.
-        """)
-
-    # ── Excel Download ────────────────────────────────
-    st.markdown("---")
-    if trades:
-        st.markdown("#### Download Paper Trading Data")
-        dl1, dl2 = st.columns(2)
-
-        with dl1:
-            if st.button(
-                "Download as Excel",
-                key="pt_download_excel",
-                type="primary",
-                use_container_width=True
-            ):
-                import io, openpyxl
-                from openpyxl.styles import (
-                    PatternFill, Font, Alignment, Border, Side
-                )
-                from openpyxl.utils import get_column_letter
-
-                wb = openpyxl.Workbook()
-
-                # ── Sheet 1: All Trades ────────────────
-                ws1 = wb.active
-                ws1.title = "All Trades"
-
-                # Header style
-                hdr_fill = PatternFill("solid", fgColor="1E40AF")
-                hdr_font = Font(color="FFFFFF", bold=True, size=11)
-                hdr_align= Alignment(horizontal="center",
-                                     vertical="center")
-                thin = Side(style="thin", color="CBD5E1")
-                border= Border(left=thin, right=thin,
-                               top=thin, bottom=thin)
-
-                headers = [
-                    "Date","Stock","Type","Score",
-                    "Entry Rs","SL Rs","Target Rs",
-                    "Exit Rs","P&L Rs","Result",
-                    "Risk Rs","R:R","Notes"
-                ]
-                ws1.append(headers)
-                for ci, h in enumerate(headers, 1):
-                    cell = ws1.cell(1, ci)
-                    cell.fill    = hdr_fill
-                    cell.font    = hdr_font
-                    cell.alignment = hdr_align
-                    cell.border  = border
-
-                # Data rows
-                win_fill  = PatternFill("solid", fgColor="DCFCE7")
-                loss_fill = PatternFill("solid", fgColor="FEE2E2")
-                open_fill = PatternFill("solid", fgColor="EFF6FF")
-
-                for t in trades:
-                    row = [
-                        t["date"], t["stock"], t["type"],
-                        t["score"],
-                        t["entry"], t["sl"], t["target"],
-                        t["exit"] if t["exit"] else "",
-                        t["pnl"]  if t["pnl"]  else "",
-                        t["result"] if t["result"] else "OPEN",
-                        t["risk"], t["rr"], t["notes"]
-                    ]
-                    ws1.append(row)
-                    row_num = ws1.max_row
-                    fill = (win_fill  if t["result"]=="WIN"
-                            else loss_fill if t["result"]=="LOSS"
-                            else open_fill)
-                    for ci in range(1, len(headers)+1):
-                        cell = ws1.cell(row_num, ci)
-                        cell.fill   = fill
-                        cell.border = border
-                        cell.alignment = Alignment(
-                            horizontal="center"
-                        )
-
-                # Column widths
-                col_widths = [12,18,14,8,12,12,12,12,
-                              12,10,10,8,30]
-                for ci, w in enumerate(col_widths, 1):
-                    ws1.column_dimensions[
-                        get_column_letter(ci)
-                    ].width = w
-
-                ws1.freeze_panes = "A2"
-                ws1.auto_filter.ref = ws1.dimensions
-
-                # ── Sheet 2: Summary ───────────────────
-                ws2 = wb.create_sheet("Summary")
-                closed_t = [t for t in trades
-                            if t["status"]=="CLOSED"]
-                wins_t   = [t for t in closed_t
-                            if t["result"]=="WIN"]
-                losses_t = [t for t in closed_t
-                            if t["result"]=="LOSS"]
-
-                total_pnl_t = sum(t["pnl"] for t in closed_t)
-                win_rate_t  = (round(len(wins_t)/
-                               len(closed_t)*100,1)
-                               if closed_t else 0)
-                avg_win_t   = (round(sum(t["pnl"]
-                               for t in wins_t)/
-                               len(wins_t),2)
-                               if wins_t else 0)
-                avg_loss_t  = (round(sum(t["pnl"]
-                               for t in losses_t)/
-                               len(losses_t),2)
-                               if losses_t else 0)
-                pf_t = (round(
-                    sum(t["pnl"] for t in wins_t) /
-                    abs(sum(t["pnl"] for t in losses_t)+0.001)
-                    ,2) if losses_t else 999)
-
-                title_font = Font(bold=True, size=14,
-                                  color="1E293B")
-                label_font = Font(bold=True, size=11,
-                                  color="475569")
-                val_font   = Font(size=11, color="1E293B")
-
-                ws2["A1"] = "Paper Trading Summary"
-                ws2["A1"].font = title_font
-                ws2.merge_cells("A1:C1")
-
-                summary_rows = [
-                    ("Total Trades",    len(trades)),
-                    ("Closed Trades",   len(closed_t)),
-                    ("Open Trades",     len(trades)-len(closed_t)),
-                    ("Winning Trades",  len(wins_t)),
-                    ("Losing Trades",   len(losses_t)),
-                    ("Win Rate %",      win_rate_t),
-                    ("Total P&L (Rs)",  total_pnl_t),
-                    ("Avg Win (Rs)",    avg_win_t),
-                    ("Avg Loss (Rs)",   avg_loss_t),
-                    ("Profit Factor",   pf_t),
-                    ("Starting Capital",
-                     st.session_state.get("pt_capital",100000)),
-                    ("Final Capital",
-                     st.session_state.get("pt_capital",100000)
-                     + total_pnl_t),
-                ]
-                for ri, (label, val) in enumerate(
-                        summary_rows, 3):
-                    ws2[f"A{ri}"] = label
-                    ws2[f"A{ri}"].font = label_font
-                    ws2[f"B{ri}"] = val
-                    ws2[f"B{ri}"].font = val_font
-                    if "P&L" in label or "Win" in label                             or "Loss" in label                             or "Capital" in label:
-                        ws2[f"B{ri}"].number_format = (
-                            '#,##0.00'
-                        )
-
-                ws2.column_dimensions["A"].width = 22
-                ws2.column_dimensions["B"].width = 16
-
-                # Save to buffer
-                buf = io.BytesIO()
-                wb.save(buf)
-                buf.seek(0)
-
-                st.download_button(
-                    label="Click to Download Excel file",
-                    data=buf.getvalue(),
-                    file_name=(
-                        f"paper_trading_"
-                        f"{now_ist().strftime('%Y%m%d')}"
-                        f".xlsx"
-                    ),
-                    mime=(
-                        "application/vnd.openxmlformats-"
-                        "officedocument.spreadsheetml.sheet"
-                    ),
-                    key="pt_xl_dl"
-                )
-
-        with dl2:
-            if st.button(
-                "Clear all trades (start fresh)",
-                key="pt_clear",
-                type="secondary",
-                use_container_width=True
-            ):
-                st.session_state["pt_trades"] = []
-                st.rerun()
-
-
-
-# ╔══════════════════════════════════════════════════════╗
-# ║  TAB 9 — TRADE JOURNAL                              ║
-# ╚══════════════════════════════════════════════════════╝
-with T9:
-    st.markdown("### 📓 Trade Journal — Real Money Trades")
-    st.caption(
-        "Record every real trade you place. "
-        "Track performance, review mistakes and improve over time."
-    )
-
-    # ── Session state init ─────────────────────────────
-    if "tj_trades" not in st.session_state:
-        st.session_state["tj_trades"] = []
-    if "tj_capital" not in st.session_state:
-        st.session_state["tj_capital"] = 100000.0
-
-    tj = st.session_state["tj_trades"]
-
-    # ── Capital setup ──────────────────────────────────
-    with st.expander("Account Settings", expanded=len(tj)==0):
-        tj_cap = st.number_input(
-            "Starting capital (Rs)",
-            value=float(st.session_state["tj_capital"]),
-            step=10000.0, min_value=1000.0,
-            key="tj_capital_input"
-        )
-        st.session_state["tj_capital"] = tj_cap
-        st.info(
-            f"Max risk per trade (2%): "
-            f"**Rs {tj_cap*0.02:,.0f}**  |  "
-            f"Never risk more than this on a single trade."
-        )
-
-    st.markdown("---")
-
-    # ── Add new journal entry ──────────────────────────
-    st.markdown("#### Record a Real Trade")
-
-    ja, jb, jc = st.columns(3)
-    with ja:
-        tj_stock  = st.text_input(
-            "Stock / Index",
-            placeholder="e.g. NIFTY 50, HDFC Bank",
-            key="tj_stock"
-        )
-        tj_type   = st.selectbox(
-            "Trade type",
-            ["CE (Call)","PE (Put)",
-             "Intraday Buy","Intraday Sell",
-             "Positional Buy","Positional Sell"],
-            key="tj_type"
-        )
-        tj_score  = st.slider(
-            "Signal score at entry",
-            0, 10, 7, key="tj_score"
-        )
-        tj_date   = st.date_input(
-            "Trade date",
-            value=now_ist().date(),
-            key="tj_date"
-        )
-        tj_time   = st.time_input(
-            "Entry time",
-            key="tj_time"
-        )
-
-    with jb:
-        tj_entry  = st.number_input(
-            "Entry price (Rs)",
-            value=0.0, step=0.5,
-            min_value=0.0, key="tj_entry"
-        )
-        tj_sl     = st.number_input(
-            "Stop loss (Rs)",
-            value=0.0, step=0.5,
-            min_value=0.0, key="tj_sl"
-        )
-        tj_target = st.number_input(
-            "Target (Rs)",
-            value=0.0, step=0.5,
-            min_value=0.0, key="tj_target"
-        )
-        tj_exit   = st.number_input(
-            "Exit price (Rs) — 0 if still open",
-            value=0.0, step=0.5,
-            min_value=0.0, key="tj_exit"
-        )
-        tj_qty    = st.number_input(
-            "Quantity / Lots",
-            value=1, step=1,
-            min_value=1, key="tj_qty"
-        )
-
-    with jc:
-        tj_emotion = st.selectbox(
-            "Emotional state at entry",
-            ["Calm and confident",
-             "Slightly anxious",
-             "FOMO (fear of missing out)",
-             "Revenge trading",
-             "Overconfident",
-             "Uncertain but entered anyway"],
-            key="tj_emotion"
-        )
-        tj_followed = st.selectbox(
-            "Followed all 11 checklist rules?",
-            ["Yes — all rules followed",
-             "No — skipped 1-2 rules",
-             "No — skipped 3+ rules",
-             "Entered on gut feeling"],
-            key="tj_followed"
-        )
-        tj_setup = st.text_area(
-            "Why did you enter? (signal details)",
-            placeholder=(
-                "Score 8/10, RSI 62, Vol surge, "
-                "EMA9 pullback, MACD cross..."
-            ),
-            height=70, key="tj_setup"
-        )
-        tj_lesson = st.text_area(
-            "What did you learn from this trade?",
-            placeholder=(
-                "Entered too early before confirmation, "
-                "should have waited for candle close..."
-            ),
-            height=70, key="tj_lesson"
-        )
-
-    if st.button(
-        "Save Trade to Journal",
-        type="primary",
-        key="tj_add",
-        use_container_width=True
-    ):
-        if tj_stock and tj_entry > 0 and tj_sl > 0:
-            risk_unit = abs(tj_entry - tj_sl)
-            tot_risk  = round(risk_unit * tj_qty, 2)
-            rr_val    = round(
-                abs(tj_target - tj_entry) /
-                (risk_unit + 0.001), 2
-            ) if tj_target > 0 else 0
-
-            # Calculate P&L if exit given
-            if tj_exit > 0:
-                if "Buy" in tj_type or "CE" in tj_type:
-                    pnl_val = round(
-                        (tj_exit - tj_entry) * tj_qty, 2
-                    )
-                else:
-                    pnl_val = round(
-                        (tj_entry - tj_exit) * tj_qty, 2
-                    )
-                res_val = "WIN" if pnl_val > 0 else "LOSS"
-                status  = "CLOSED"
-            else:
-                pnl_val = 0.0
-                res_val = ""
-                status  = "OPEN"
-
-            entry = {
-                "id":       len(tj) + 1,
-                "date":     str(tj_date),
-                "time":     str(tj_time),
-                "stock":    tj_stock,
-                "type":     tj_type,
-                "score":    tj_score,
-                "entry":    tj_entry,
-                "sl":       tj_sl,
-                "target":   tj_target,
-                "exit":     tj_exit,
-                "qty":      tj_qty,
-                "risk":     tot_risk,
-                "rr":       rr_val,
-                "pnl":      pnl_val,
-                "result":   res_val,
-                "status":   status,
-                "emotion":  tj_emotion,
-                "followed": tj_followed,
-                "setup":    tj_setup,
-                "lesson":   tj_lesson,
-            }
-            tj.append(entry)
-            st.session_state["tj_trades"] = tj
-            st.success(
-                f"Saved: {tj_stock} {tj_type} "
-                f"@ Rs{tj_entry} | "
-                f"Risk Rs{tot_risk:,.0f} | "
-                f"R:R {rr_val}:1"
-                + (f" | P&L Rs{pnl_val:+,.0f} ({res_val})"
-                   if tj_exit > 0 else "")
-            )
-            if tot_risk > tj_cap * 0.02:
-                st.warning(
-                    f"Risk Rs{tot_risk:,.0f} exceeds 2% rule "
-                    f"(Rs{tj_cap*0.02:,.0f}). "
-                    "Review your position sizing."
-                )
-        else:
-            st.error("Fill stock name, entry price and SL.")
-
-    st.markdown("---")
-
-    # ── Open trades ────────────────────────────────────
-    open_tj = [t for t in tj if t["status"]=="OPEN"]
-    if open_tj:
-        st.markdown(f"#### Open Positions ({len(open_tj)})")
-        for t in open_tj:
-            ot1,ot2,ot3,ot4 = st.columns([3,2,2,1])
-            with ot1:
-                st.markdown(
-                    f"**{t['stock']}** {t['type']}  |  "
-                    f"Entry Rs{t['entry']:,.2f}  |  "
-                    f"SL Rs{t['sl']:,.2f}  |  "
-                    f"Score {t['score']}/10"
-                )
-            with ot2:
-                lp_tj = live_price(STOCKS.get(t["stock"],""))
-                if lp_tj["ok"]:
-                    cur = lp_tj["p"]
-                    unr = round(
-                        (cur - t["entry"]) * t["qty"]
-                        if "Buy" in t["type"]
-                            or "CE" in t["type"]
-                        else
-                        (t["entry"] - cur) * t["qty"], 2
-                    )
-                    uc = ("#16a34a" if unr >= 0
-                          else "#dc2626")
-                    st.markdown(
-                        f"Live Rs{cur:,}  "
-                        f"<span style='color:{uc}'>"
-                        f"Rs{unr:+,.0f}</span>",
-                        unsafe_allow_html=True
-                    )
-            with ot3:
-                close_px = st.number_input(
-                    "Exit at Rs",
-                    value=0.0, step=0.5,
-                    key=f"tj_exit_{t['id']}",
-                    label_visibility="collapsed"
-                )
-            with ot4:
-                if st.button(
-                    "Close",
-                    key=f"tj_close_{t['id']}",
-                    type="primary"
-                ):
-                    if close_px > 0:
-                        if ("Buy" in t["type"]
-                                or "CE" in t["type"]):
-                            pnl_c = round(
-                                (close_px-t["entry"])
-                                * t["qty"], 2
-                            )
-                        else:
-                            pnl_c = round(
-                                (t["entry"]-close_px)
-                                * t["qty"], 2
-                            )
-                        for tr in st.session_state[
-                                "tj_trades"]:
-                            if tr["id"] == t["id"]:
-                                tr["status"] = "CLOSED"
-                                tr["exit"]   = close_px
-                                tr["pnl"]    = pnl_c
-                                tr["result"] = (
-                                    "WIN" if pnl_c > 0
-                                    else "LOSS"
-                                )
-                        st.rerun()
-                    else:
-                        st.error("Enter exit price first")
-
-    # ── Performance dashboard ──────────────────────────
-    closed_tj = [t for t in tj if t["status"]=="CLOSED"]
-
-    if closed_tj:
-        st.markdown("---")
-        st.markdown("### Performance Report")
-
-        tot_pnl   = sum(t["pnl"] for t in closed_tj)
-        wins_tj   = [t for t in closed_tj
-                     if t["result"]=="WIN"]
-        losses_tj = [t for t in closed_tj
-                     if t["result"]=="LOSS"]
-        wr_tj     = round(
-            len(wins_tj)/len(closed_tj)*100, 1
-        )
-        avg_w_tj  = round(
-            sum(t["pnl"] for t in wins_tj)/
-            (len(wins_tj)+0.001), 2
-        )
-        avg_l_tj  = round(
-            sum(t["pnl"] for t in losses_tj)/
-            (len(losses_tj)+0.001), 2
-        )
-        pf_tj = round(
-            sum(t["pnl"] for t in wins_tj) /
-            abs(sum(t["pnl"] for t in losses_tj)+0.001),
-            2
-        ) if losses_tj else 999
-        exp_tj = round(
-            (wr_tj/100 * avg_w_tj) +
-            ((1-wr_tj/100) * avg_l_tj), 2
-        )
-        cur_cap = tj_cap + tot_pnl
-        roi_pct = round(tot_pnl/tj_cap*100, 2)
-
-        # Metrics
-        mc = st.columns(6)
-        mc[0].metric(
-            "Total P&L",
-            f"Rs{tot_pnl:+,.0f}",
-            delta=f"{roi_pct:+.1f}%"
-        )
-        mc[1].metric("Win Rate",      f"{wr_tj}%")
-        mc[2].metric("Profit Factor", f"{pf_tj}")
-        mc[3].metric("Avg Win",       f"Rs{avg_w_tj:+,.0f}")
-        mc[4].metric("Avg Loss",      f"Rs{avg_l_tj:+,.0f}")
-        mc[5].metric("Expectancy",    f"Rs{exp_tj:+.0f}")
-
-        # ── Charts ────────────────────────────────────
-        import plotly.graph_objects as go_tj
-        ch1, ch2 = st.columns(2)
-
-        with ch1:
-            # Capital curve
-            running = tj_cap
-            cx, cy  = ["Start"], [tj_cap]
-            for t in sorted(closed_tj,
-                            key=lambda x: x["date"]):
-                running += t["pnl"]
-                cx.append(f"#{t['id']} {t['stock'][:6]}")
-                cy.append(round(running, 2))
-
-            fig_cap = go_tj.Figure()
-            col_line= ("#16a34a" if cy[-1]>=tj_cap
-                       else "#dc2626")
-            fig_cap.add_trace(go_tj.Scatter(
-                x=cx, y=cy,
-                mode="lines+markers",
-                line=dict(color=col_line, width=2.5),
-                marker=dict(size=7, color=col_line),
-                fill="tozeroy",
-                fillcolor=(
-                    "rgba(22,163,74,0.08)"
-                    if cy[-1]>=tj_cap
-                    else "rgba(220,38,38,0.08)"
-                ),
-                name="Capital"
-            ))
-            fig_cap.add_hline(
-                y=tj_cap,
-                line_dash="dash",
-                line_color="#94a3b8",
-                opacity=0.5,
-                annotation_text="Starting capital"
-            )
-            fig_cap.update_layout(
-                template="plotly_white",
-                height=280,
-                title="Capital curve",
-                xaxis_tickangle=-30,
-                yaxis_title="Rs",
-                margin=dict(l=10,r=10,t=40,b=60),
-                showlegend=False
-            )
-            st.plotly_chart(
-                fig_cap, use_container_width=True
-            )
-
-        with ch2:
-            # Win vs Loss bar
-            months = {}
-            for t in closed_tj:
-                m = t["date"][:7]
-                if m not in months:
-                    months[m] = {"win":0,"loss":0,"pnl":0}
-                if t["result"]=="WIN":
-                    months[m]["win"]  += 1
-                else:
-                    months[m]["loss"] += 1
-                months[m]["pnl"] += t["pnl"]
-
-            if months:
-                fig_m = go_tj.Figure()
-                fig_m.add_trace(go_tj.Bar(
-                    x=list(months.keys()),
-                    y=[v["win"] for v in months.values()],
-                    name="Wins",
-                    marker_color="#16a34a",
-                    opacity=0.85
-                ))
-                fig_m.add_trace(go_tj.Bar(
-                    x=list(months.keys()),
-                    y=[v["loss"] for v in months.values()],
-                    name="Losses",
-                    marker_color="#dc2626",
-                    opacity=0.85
-                ))
-                fig_m.update_layout(
-                    barmode="group",
-                    template="plotly_white",
-                    height=280,
-                    title="Monthly wins vs losses",
-                    margin=dict(l=10,r=10,t=40,b=30),
-                    yaxis_title="Trades",
-                    legend=dict(
-                        orientation="h",
-                        y=1.1
-                    )
-                )
-                st.plotly_chart(
-                    fig_m, use_container_width=True
-                )
-
-        # ── Emotion & Discipline analysis ─────────────
-        st.markdown("#### Behaviour Analysis")
-        ba1, ba2 = st.columns(2)
-
-        with ba1:
-            st.markdown("##### Emotion vs Result")
-            emotion_data = {}
-            for t in closed_tj:
-                em = t.get("emotion","Unknown")
-                if em not in emotion_data:
-                    emotion_data[em] = {"w":0,"l":0}
-                if t["result"]=="WIN":
-                    emotion_data[em]["w"] += 1
-                else:
-                    emotion_data[em]["l"] += 1
-
-            for em, data in emotion_data.items():
-                total_em = data["w"] + data["l"]
-                wr_em    = round(data["w"]/total_em*100)
-                col_em   = ("#16a34a" if wr_em>=50
-                            else "#dc2626")
-                st.markdown(
-                    f"<div style='background:#f8fafc;"
-                    f"border:1px solid #e2e8f0;"
-                    f"border-radius:8px;"
-                    f"padding:10px 14px;margin:4px 0;"
-                    f"display:flex;"
-                    f"justify-content:space-between'>"
-                    f"<span style='color:#374151;"
-                    f"font-size:13px'>{em}</span>"
-                    f"<span style='color:{col_em};"
-                    f"font-weight:700;font-size:13px'>"
-                    f"{wr_em}% win rate "
-                    f"({total_em} trades)</span>"
-                    f"</div>",
-                    unsafe_allow_html=True
-                )
-
-        with ba2:
-            st.markdown("##### Discipline vs Result")
-            disc_data = {}
-            for t in closed_tj:
-                df_ = t.get("followed","Unknown")
-                if df_ not in disc_data:
-                    disc_data[df_] = {"w":0,"l":0}
-                if t["result"]=="WIN":
-                    disc_data[df_]["w"] += 1
-                else:
-                    disc_data[df_]["l"] += 1
-
-            for df_, data in disc_data.items():
-                total_d = data["w"] + data["l"]
-                wr_d    = round(data["w"]/total_d*100)
-                col_d   = ("#16a34a" if wr_d>=50
-                           else "#dc2626")
-                label   = df_[:35]+"..." if len(df_)>35                           else df_
-                st.markdown(
-                    f"<div style='background:#f8fafc;"
-                    f"border:1px solid #e2e8f0;"
-                    f"border-radius:8px;"
-                    f"padding:10px 14px;margin:4px 0;"
-                    f"display:flex;"
-                    f"justify-content:space-between'>"
-                    f"<span style='color:#374151;"
-                    f"font-size:13px'>{label}</span>"
-                    f"<span style='color:{col_d};"
-                    f"font-weight:700;font-size:13px'>"
-                    f"{wr_d}% win "
-                    f"({total_d})</span>"
-                    f"</div>",
-                    unsafe_allow_html=True
-                )
-
-        # ── Lessons learned section ────────────────────
-        lessons = [t for t in closed_tj
-                   if t.get("lesson","").strip()]
-        if lessons:
-            st.markdown("---")
-            st.markdown("#### Lessons Learned")
-            for t in lessons[-5:]:
-                col_r = ("#16a34a" if t["result"]=="WIN"
-                         else "#dc2626")
-                st.markdown(
-                    f"<div style='background:#f8fafc;"
-                    f"border-left:3px solid {col_r};"
-                    f"border-radius:0 8px 8px 0;"
-                    f"padding:10px 14px;margin:6px 0'>"
-                    f"<div style='font-size:12px;"
-                    f"color:#64748b;margin-bottom:4px'>"
-                    f"{t['date']} | {t['stock']} | "
-                    f"{t['result']}</div>"
-                    f"<div style='font-size:13px;"
-                    f"color:#374151'>{t['lesson']}</div>"
-                    f"</div>",
-                    unsafe_allow_html=True
-                )
-
-        # ── All trades table ───────────────────────────
-        with st.expander("All journal entries"):
-            df_tj = pd.DataFrame([{
-                "Date":      t["date"],
-                "Stock":     t["stock"],
-                "Type":      t["type"],
-                "Score":     t["score"],
-                "Emotion":   t.get("emotion","")[:20],
-                "Followed":  "Yes" if "Yes" in
-                             t.get("followed","") else "No",
-                "Entry":     f"Rs{t['entry']:,.2f}",
-                "Exit":      f"Rs{t['exit']:,.2f}"
-                             if t["exit"] else "Open",
-                "P&L":       f"Rs{t['pnl']:+,.0f}"
-                             if t["pnl"] else "Open",
-                "Result":    t["result"] or "Open",
-            } for t in tj])
-            st.dataframe(
-                df_tj,
-                use_container_width=True,
-                hide_index=True
-            )
-
-    # ── Readiness verdict ──────────────────────────────
-    if closed_tj and len(closed_tj) >= 5:
-        st.markdown("---")
-        wr_check = wr_tj >= 45
-        pf_check = pf_tj >= 1.5
-        disc_pct = sum(
-            1 for t in closed_tj
-            if "Yes" in t.get("followed","")
-        ) / len(closed_tj) * 100
-
-        if wr_check and pf_check and disc_pct >= 80:
-            st.success(
-                f"Win rate {wr_tj}% | Profit factor {pf_tj} | "
-                f"Discipline {disc_pct:.0f}% — "
-                "Your trading is consistent. "
-                "Ready to increase position size gradually."
-            )
-        elif wr_check or pf_check:
-            st.warning(
-                f"Win rate {wr_tj}% | Profit factor {pf_tj} — "
-                "Getting better. Follow all 11 rules every trade."
-            )
-        else:
-            st.error(
-                f"Win rate {wr_tj}% | Profit factor {pf_tj} — "
-                "Review losing trades. Are you following all 11 rules?"
-            )
-
-    # ── Download Excel ─────────────────────────────────
-    st.markdown("---")
-    dl_col1, dl_col2 = st.columns(2)
-
-    with dl_col1:
-        if tj and st.button(
-            "Download Journal as Excel",
-            type="primary",
-            key="tj_download",
-            use_container_width=True
-        ):
-            import io, openpyxl
-            from openpyxl.styles import (
-                PatternFill, Font, Alignment, Border, Side
-            )
-            from openpyxl.utils import get_column_letter
-
-            wb2 = openpyxl.Workbook()
-
-            # Sheet 1: All entries
-            ws_all = wb2.active
-            ws_all.title = "All Trades"
-            hf = PatternFill("solid", fgColor="1E40AF")
-            hft= Font(color="FFFFFF", bold=True, size=11)
-            bd = Border(
-                left=Side(style="thin",color="CBD5E1"),
-                right=Side(style="thin",color="CBD5E1"),
-                top=Side(style="thin",color="CBD5E1"),
-                bottom=Side(style="thin",color="CBD5E1")
-            )
-            hdrs2 = [
-                "Date","Time","Stock","Type","Score",
-                "Entry Rs","SL Rs","Target Rs","Exit Rs",
-                "Qty","Risk Rs","R:R","P&L Rs","Result",
-                "Emotion","Followed Rules","Setup","Lesson"
-            ]
-            ws_all.append(hdrs2)
-            for ci2, h2 in enumerate(hdrs2, 1):
-                c2 = ws_all.cell(1, ci2)
-                c2.fill = hf
-                c2.font = hft
-                c2.alignment = Alignment(horizontal="center")
-                c2.border = bd
-
-            wf = PatternFill("solid", fgColor="DCFCE7")
-            lf = PatternFill("solid", fgColor="FEE2E2")
-            of = PatternFill("solid", fgColor="EFF6FF")
-
-            for t in tj:
-                row2 = [
-                    t["date"], t.get("time",""),
-                    t["stock"], t["type"], t["score"],
-                    t["entry"], t["sl"], t["target"],
-                    t["exit"] or "", t["qty"],
-                    t["risk"], t["rr"],
-                    t["pnl"] or "", t["result"] or "OPEN",
-                    t.get("emotion",""),
-                    t.get("followed",""),
-                    t.get("setup",""),
-                    t.get("lesson","")
-                ]
-                ws_all.append(row2)
-                rn2 = ws_all.max_row
-                fill2 = (wf if t["result"]=="WIN"
-                         else lf if t["result"]=="LOSS"
-                         else of)
-                for ci2 in range(1, len(hdrs2)+1):
-                    cell2 = ws_all.cell(rn2, ci2)
-                    cell2.fill   = fill2
-                    cell2.border = bd
-                    cell2.alignment = Alignment(
-                        horizontal="center",
-                        wrap_text=True
-                    )
-
-            widths2 = [12,10,18,14,8,12,12,12,12,
-                       8,10,8,12,10,22,20,30,30]
-            for ci2, w2 in enumerate(widths2, 1):
-                ws_all.column_dimensions[
-                    get_column_letter(ci2)
-                ].width = w2
-            ws_all.freeze_panes = "A2"
-            ws_all.auto_filter.ref = ws_all.dimensions
-
-            # Sheet 2: Monthly summary
-            ws_m = wb2.create_sheet("Monthly Summary")
-            ws_m.append(["Month","Trades","Wins",
-                         "Losses","Win%","Total P&L"])
-            months2 = {}
-            for t in closed_tj:
-                m2 = t["date"][:7]
-                if m2 not in months2:
-                    months2[m2] = {
-                        "t":0,"w":0,"l":0,"pnl":0
-                    }
-                months2[m2]["t"] += 1
-                if t["result"]=="WIN":
-                    months2[m2]["w"] += 1
-                else:
-                    months2[m2]["l"] += 1
-                months2[m2]["pnl"] += t["pnl"]
-
-            for m2, d2 in sorted(months2.items()):
-                wr2 = round(d2["w"]/d2["t"]*100, 1)
-                ws_m.append([
-                    m2, d2["t"], d2["w"], d2["l"],
-                    wr2, round(d2["pnl"],2)
-                ])
-
-            ws_m.column_dimensions["A"].width = 12
-            ws_m.column_dimensions["F"].width = 14
-
-            buf2 = io.BytesIO()
-            wb2.save(buf2)
-            buf2.seek(0)
-
-            st.download_button(
-                label="Click to Download Journal Excel",
-                data=buf2.getvalue(),
-                file_name=(
-                    f"trade_journal_"
-                    f"{now_ist().strftime('%Y%m%d')}.xlsx"
-                ),
-                mime=(
-                    "application/vnd.openxmlformats-"
-                    "officedocument.spreadsheetml.sheet"
-                ),
-                key="tj_xl_dl"
-            )
-
-    with dl_col2:
-        if tj and st.button(
-            "Clear journal (start fresh)",
-            type="secondary",
-            key="tj_clear",
-            use_container_width=True
-        ):
-            st.session_state["tj_trades"] = []
-            st.rerun()
-
-    if not tj:
-        st.markdown("""
-        ### How to use the Trade Journal
-
-        Record **every real money trade** here — not just the
-        good ones. The whole point of a journal is honesty.
-
-        **What makes this journal powerful:**
-
-        It tracks not just profit and loss but also your
-        **emotional state** and whether you **followed your
-        rules**. After 20 trades you will see clearly:
-
-        - Do you win more when you are calm vs anxious?
-        - Do trades where you skipped rules lose money?
-        - Which stocks work best for your style?
-        - What time of day do you trade best?
-
-        **The single most important column is Lessons Learned.**
-        Write one sentence after every trade — good or bad.
-        In 3 months this becomes your personal trading manual
-        worth more than any course or book.
-
-        **Download to Excel anytime** to keep a permanent
-        record even if you clear the app.
-        """)
-
-
 # ── Auto refresh ──────────────────────────────────────────
 if auto_rf:
     st.sidebar.success("🔄 Refreshing every 2 min...")

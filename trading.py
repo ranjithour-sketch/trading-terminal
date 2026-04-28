@@ -78,18 +78,75 @@ html, body, .stApp, [class*="css"] {
     background-color: #f4f6f9 !important;
     color: #1e293b !important;
 }
+
+/* ── Mobile-first layout ──────────────────────────── */
 .block-container {
-    padding-top: 1rem !important;
+    padding-top: 0.5rem !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
     max-width: 1400px !important;
 }
-/* Hide Streamlit default top bar decoration */
+
+/* Streamlit header - make transparent on all devices */
 header[data-testid="stHeader"] {
-    background: transparent !important;
-    border-bottom: none !important;
+    background: rgba(244,246,249,0.95) !important;
+    border-bottom: 1px solid #e2e8f0 !important;
+    backdrop-filter: blur(8px) !important;
+    z-index: 999 !important;
 }
-/* Ensure main content not hidden under header */
+
+/* Push content below fixed header */
 .main .block-container {
     padding-top: 1rem !important;
+}
+
+/* ── Mobile responsive text ──────────────────────── */
+@media (max-width: 768px) {
+    .block-container {
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+    }
+    /* Tabs scroll horizontally on mobile */
+    .stTabs [data-baseweb="tab-list"] {
+        overflow-x: auto !important;
+        flex-wrap: nowrap !important;
+        -webkit-overflow-scrolling: touch !important;
+        scrollbar-width: none !important;
+    }
+    .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar {
+        display: none !important;
+    }
+    .stTabs [data-baseweb="tab"] {
+        white-space: nowrap !important;
+        font-size: 12px !important;
+        padding: 6px 10px !important;
+        flex-shrink: 0 !important;
+    }
+    /* Buttons full width on mobile */
+    .stButton button {
+        font-size: 13px !important;
+        padding: 8px 10px !important;
+    }
+    /* Metric cards smaller on mobile */
+    div[data-testid="metric-container"] {
+        padding: 10px 12px !important;
+    }
+    div[data-testid="metric-container"] label {
+        font-size: 11px !important;
+    }
+    div[data-testid="metric-container"]
+        [data-testid="stMetricValue"] {
+        font-size: 18px !important;
+    }
+    /* Inputs full width */
+    .stTextInput input,
+    .stNumberInput input {
+        font-size: 16px !important;
+    }
+    /* Index cards smaller text */
+    .stMarkdown p {
+        font-size: 13px !important;
+    }
 }
 
 /* ═══════════════════════════════════════════════
@@ -452,126 +509,256 @@ caption, .stCaption {
 # STOCK & SECTOR DATABASE
 # ══════════════════════════════════════════════════════════
 STOCKS = {
-    # Indices
-    "NIFTY 50":       "^NSEI",
-    "BANK NIFTY":     "^NSEBANK",
-    "SENSEX":         "^BSESN",
-    "NIFTY IT":       "^CNXIT",
-    "NIFTY AUTO":     "^CNXAUTO",
-    "NIFTY PHARMA":   "^CNXPHARMA",
-    "NIFTY METAL":    "^CNXMETAL",
-    "NIFTY FMCG":     "^CNXFMCG",
-    # Banking
-    "HDFC Bank":      "HDFCBANK.NS",
-    "ICICI Bank":     "ICICIBANK.NS",
-    "SBI":            "SBIN.NS",
-    "Kotak Bank":     "KOTAKBANK.NS",
-    "Axis Bank":      "AXISBANK.NS",
-    "IndusInd Bank":  "INDUSINDBK.NS",
-    "Yes Bank":       "YESBANK.NS",
-    "PNB":            "PNB.NS",
-    "Bank of Baroda": "BANKBARODA.NS",
-    "Canara Bank":    "CANBK.NS",
-    "Federal Bank":   "FEDERALBNK.NS",
-    "IDFC First":     "IDFCFIRSTB.NS",
-    "Bajaj Finance":  "BAJFINANCE.NS",
-    "Bajaj Finserv":  "BAJAJFINSV.NS",
-    # IT
-    "TCS":            "TCS.NS",
-    "Infosys":        "INFY.NS",
-    "Wipro":          "WIPRO.NS",
-    "HCL Tech":       "HCLTECH.NS",
-    "Tech Mahindra":  "TECHM.NS",
-    "Persistent":     "PERSISTENT.NS",
-    "Coforge":        "COFORGE.NS",
-    "LTIMindtree":    "LTIM.NS",
-    # Energy
-    "Reliance":       "RELIANCE.NS",
-    "ONGC":           "ONGC.NS",
-    "Indian Oil":     "IOC.NS",
-    "BPCL":           "BPCL.NS",
-    "NTPC":           "NTPC.NS",
-    "Power Grid":     "POWERGRID.NS",
-    "Adani Green":    "ADANIGREEN.NS",
-    "Tata Power":     "TATAPOWER.NS",
-    "Gail":           "GAIL.NS",
-    # Auto
-    "Ashok Leyland":     "ASHOKLEY.NS",
-    "Maruti":         "MARUTI.NS",
-    "M&M":            "M&M.BO",
-    "Hero MotoCorp":  "HEROMOTOCO.NS",
-    "Bajaj Auto":     "BAJAJ-AUTO.BO",
-    "TVS Motor":      "TVSMOTOR.NS",
-    "Eicher Motors":  "EICHERMOT.NS",
-    "Ashok Leyland":  "ASHOKLEY.NS",
-    # Pharma
-    "Sun Pharma":     "SUNPHARMA.NS",
-    "Dr Reddy":       "DRREDDY.NS",
-    "Cipla":          "CIPLA.NS",
-    "Divi's Lab":     "DIVISLAB.NS",
-    "Lupin":          "LUPIN.NS",
-    "Apollo Hosp":    "APOLLOHOSP.NS",
-    # FMCG
-    "HUL":            "HINDUNILVR.NS",
-    "ITC":            "ITC.NS",
-    "Nestle":         "NESTLEIND.NS",
-    "Britannia":      "BRITANNIA.NS",
-    "Dabur":          "DABUR.NS",
-    "Tata Consumer":  "TATACONSUM.NS",
-    # Metals
-    "Tata Steel":     "TATASTEEL.NS",
-    "JSW Steel":      "JSWSTEEL.NS",
-    "Hindalco":       "HINDALCO.NS",
-    "Coal India":     "COALINDIA.NS",
-    "Vedanta":        "VEDL.NS",
-    "SAIL":           "SAIL.NS",
-    # Infra / Defence
-    "L&T":            "LT.NS",
-    "Adani Ports":    "ADANIPORTS.NS",
-    "DLF":            "DLF.NS",
-    "UltraTech":      "ULTRACEMCO.NS",
-    "HAL":            "HAL.NS",
-    "BEL":            "BEL.NS",
-    "IRCTC":          "IRCTC.NS",
-    "RVNL":           "RVNL.NS",
-    "IRFC":           "IRFC.NS",
-    "Mazagon Dock":   "MAZDOCK.NS",
-    # Telecom / Consumer
-    "Bharti Airtel":  "BHARTIARTL.NS",
-    "Zomato":         "ZOMATO.NS",
-    "Nykaa":          "NYKAA.NS",
-    "DMart":          "DMART.NS",
-    "Trent":          "TRENT.NS",
-    "Asian Paints":   "ASIANPAINT.NS",
-    "Pidilite":       "PIDILITIND.NS",
+    # ── Indices ───────────────────────────────────────
+    "NIFTY 50":         "^NSEI",
+    "BANK NIFTY":       "^NSEBANK",
+    "SENSEX":           "^BSESN",
+    "NIFTY IT":         "^CNXIT",
+    "NIFTY AUTO":       "^CNXAUTO",
+    "NIFTY PHARMA":     "^CNXPHARMA",
+    "NIFTY METAL":      "^CNXMETAL",
+    "NIFTY FMCG":       "^CNXFMCG",
+    "NIFTY MIDCAP":     "^NSEMDCP50",
+    "INDIA VIX":        "^INDIAVIX",
+    # ── Banking & Finance ─────────────────────────────
+    "HDFC Bank":        "HDFCBANK.NS",
+    "ICICI Bank":       "ICICIBANK.NS",
+    "SBI":              "SBIN.NS",
+    "Kotak Bank":       "KOTAKBANK.NS",
+    "Axis Bank":        "AXISBANK.NS",
+    "IndusInd Bank":    "INDUSINDBK.NS",
+    "Yes Bank":         "YESBANK.NS",
+    "PNB":              "PNB.NS",
+    "Bank of Baroda":   "BANKBARODA.NS",
+    "Canara Bank":      "CANBK.NS",
+    "Federal Bank":     "FEDERALBNK.NS",
+    "IDFC First":       "IDFCFIRSTB.NS",
+    "Bajaj Finance":    "BAJFINANCE.NS",
+    "Bajaj Finserv":    "BAJAJFINSV.NS",
+    "Shriram Finance":  "SHRIRAMFIN.NS",
+    "Muthoot Finance":  "MUTHOOTFIN.NS",
+    "LIC Housing":      "LICHSGFIN.NS",
+    "HDFC Life":        "HDFCLIFE.NS",
+    "SBI Life":         "SBILIFE.NS",
+    "ICICI Lombard":    "ICICIGI.NS",
+    # ── IT & Technology ──────────────────────────────
+    "TCS":              "TCS.NS",
+    "Infosys":          "INFY.NS",
+    "Wipro":            "WIPRO.NS",
+    "HCL Tech":         "HCLTECH.NS",
+    "Tech Mahindra":    "TECHM.NS",
+    "Persistent":       "PERSISTENT.NS",
+    "Coforge":          "COFORGE.NS",
+    "LTIMindtree":      "LTIM.NS",
+    "Mphasis":          "MPHASIS.NS",
+    "Tata Elxsi":       "TATAELXSI.NS",
+    "KPIT Tech":        "KPITTECH.NS",
+    "Cyient":           "CYIENT.NS",
+    # ── Energy & Power ───────────────────────────────
+    "Reliance":         "RELIANCE.NS",
+    "ONGC":             "ONGC.NS",
+    "Indian Oil":       "IOC.NS",
+    "BPCL":             "BPCL.NS",
+    "NTPC":             "NTPC.NS",
+    "Power Grid":       "POWERGRID.NS",
+    "Adani Green":      "ADANIGREEN.NS",
+    "Adani Power":      "ADANIPOWER.NS",
+    "Adani Energy":     "ADANIENSOL.NS",
+    "Tata Power":       "TATAPOWER.NS",
+    "Gail":             "GAIL.NS",
+    "Coal India":       "COALINDIA.NS",
+    "NHPC":             "NHPC.NS",
+    "SJVN":             "SJVN.NS",
+    "Torrent Power":    "TORNTPOWER.NS",
+    "JSW Energy":       "JSWENERGY.NS",
+    # ── Auto & Auto Ancillary ─────────────────────────
+    "Maruti":           "MARUTI.NS",
+    "M&M":              "M&M.NS",
+    "Hero MotoCorp":    "HEROMOTOCO.NS",
+    "Bajaj Auto":       "BAJAJ-AUTO.NS",
+    "TVS Motor":        "TVSMOTOR.NS",
+    "Eicher Motors":    "EICHERMOT.NS",
+    "Ashok Leyland":    "ASHOKLEY.NS",
+    "Tata Motors":      "TATAMOTORS.NS",
+    "Samvardhana":      "MOTHERSON.NS",
+    "Bosch":            "BOSCHLTD.NS",
+    "Balkrishna Ind":   "BALKRISIND.NS",
+    "MRF":              "MRF.NS",
+    "Apollo Tyres":     "APOLLOTYRE.NS",
+    # ── Pharma & Healthcare ───────────────────────────
+    "Sun Pharma":       "SUNPHARMA.NS",
+    "Dr Reddy":         "DRREDDY.NS",
+    "Cipla":            "CIPLA.NS",
+    "Divi's Lab":       "DIVISLAB.NS",
+    "Lupin":            "LUPIN.NS",
+    "Apollo Hosp":      "APOLLOHOSP.NS",
+    "Mankind Pharma":   "MANKIND.NS",
+    "Zydus Life":       "ZYDUSLIFE.NS",
+    "Alkem Lab":        "ALKEM.NS",
+    "Torrent Pharma":   "TORNTPHARM.NS",
+    "Aurobindo":        "AUROPHARMA.NS",
+    "Max Healthcare":   "MAXHEALTH.NS",
+    # ── FMCG & Consumer ──────────────────────────────
+    "HUL":              "HINDUNILVR.NS",
+    "ITC":              "ITC.NS",
+    "Nestle":           "NESTLEIND.NS",
+    "Britannia":        "BRITANNIA.NS",
+    "Dabur":            "DABUR.NS",
+    "Tata Consumer":    "TATACONSUM.NS",
+    "Marico":           "MARICO.NS",
+    "Colgate":          "COLPAL.NS",
+    "Emami":            "EMAMILTD.NS",
+    "Godrej Consumer":  "GODREJCP.NS",
+    "United Spirits":   "MCDOWELL-N.NS",
+    # ── Metals & Mining ──────────────────────────────
+    "Tata Steel":       "TATASTEEL.NS",
+    "JSW Steel":        "JSWSTEEL.NS",
+    "Hindalco":         "HINDALCO.NS",
+    "Vedanta":          "VEDL.NS",
+    "SAIL":             "SAIL.NS",
+    "NMDC":             "NMDC.NS",
+    "Jindal Steel":     "JSPL.NS",
+    "APL Apollo":       "APLAPOLLO.NS",
+    "Hindustan Zinc":   "HINDZINC.NS",
+    "National Aluminium":"NATIONALUM.NS",
+    # ── Infrastructure & Realty ───────────────────────
+    "L&T":              "LT.NS",
+    "UltraTech":        "ULTRACEMCO.NS",
+    "DLF":              "DLF.NS",
+    "Godrej Properties":"GODREJPROP.NS",
+    "Prestige Estate":  "PRESTIGE.NS",
+    "Oberoi Realty":    "OBEROIRLTY.NS",
+    "Macrotech":        "LODHA.NS",
+    "ACC":              "ACC.NS",
+    "Ambuja Cement":    "AMBUJACEM.NS",
+    "Shree Cement":     "SHREECEM.NS",
+    "Dalmia Bharat":    "DALBHARAT.NS",
+    # ── Adani Group ──────────────────────────────────
+    "Adani Ports":      "ADANIPORTS.NS",
+    "Adani Enterprises":"ADANIENT.NS",
+    "Adani Total Gas":  "ATGL.NS",
+    "Adani Wilmar":     "AWL.NS",
+    "NDTV":             "NDTV.NS",
+    # ── Tata Group ───────────────────────────────────
+    "Tata Chemicals":   "TATACHEM.NS",
+    "Titan":            "TITAN.NS",
+    "Trent":            "TRENT.NS",
+    "Tata Comm":        "TATACOMM.NS",
+    "Indian Hotels":    "INDHOTEL.NS",
+    "Voltas":           "VOLTAS.NS",
+    # ── Defence & Railways ───────────────────────────
+    "HAL":              "HAL.NS",
+    "BEL":              "BEL.NS",
+    "Mazagon Dock":     "MAZDOCK.NS",
+    "RVNL":             "RVNL.NS",
+    "IRFC":             "IRFC.NS",
+    "IRCTC":            "IRCTC.NS",
+    "IRCON":            "IRCON.NS",
+    "BEML":             "BEML.NS",
+    "Cochin Shipyard":  "COCHINSHIP.NS",
+    "Garden Reach":     "GRSE.NS",
+    "BDL":              "BDL.NS",
+    "Data Patterns":    "DATAPATTNS.NS",
+    # ── Telecom ──────────────────────────────────────
+    "Bharti Airtel":    "BHARTIARTL.NS",
+    "Vodafone Idea":    "IDEA.NS",
+    "Indus Towers":     "INDUSTOWER.NS",
+    # ── New Age & Consumer Tech ───────────────────────
+    "Zomato":           "ZOMATO.NS",
+    "Nykaa":            "NYKAA.NS",
+    "Paytm":            "PAYTM.NS",
+    "DMart":            "DMART.NS",
+    "PB Fintech":       "POLICYBZR.NS",
+    "CarTrade":         "CARTRADE.NS",
+    # ── Chemicals & Specialty ─────────────────────────
+    "Asian Paints":     "ASIANPAINT.NS",
+    "Pidilite":         "PIDILITIND.NS",
+    "SRF":              "SRF.NS",
+    "Navin Fluorine":   "NAVINFLUOR.NS",
+    "Deepak Nitrite":   "DEEPAKNTR.NS",
+    "Atul Ltd":         "ATUL.NS",
+    # ── Capital Goods & Engineering ───────────────────
+    "Siemens":          "SIEMENS.NS",
+    "ABB India":        "ABB.NS",
+    "Havells":          "HAVELLS.NS",
+    "Crompton":         "CROMPTON.NS",
+    "Thermax":          "THERMAX.NS",
+    "Cummins":          "CUMMINSIND.NS",
+    "Bharat Forge":     "BHARATFORG.NS",
+    "Schaeffler":       "SCHAEFFLER.NS",
+    # ── Media & Entertainment ─────────────────────────
+    "Sun TV":           "SUNTV.NS",
+    "Zee Entertainment":"ZEEL.NS",
+    "PVR Inox":         "PVRINOX.NS",
 }
 
 SECTORS = {
-    "🏆 Top 20 F&O": [
+    "🏆 Top 30 F&O": [
         "NIFTY 50","BANK NIFTY","Reliance","HDFC Bank",
-        "ICICI Bank","TCS","Infosys","SBI","Tata Motors DVR",
+        "ICICI Bank","TCS","Infosys","SBI","Wipro",
         "Bajaj Finance","ITC","Sun Pharma","L&T","Maruti",
         "Coal India","NTPC","Bharti Airtel","Tata Steel",
-        "Axis Bank","Wipro",
+        "Axis Bank","HCL Tech","Power Grid","Adani Ports",
+        "Hindalco","ONGC","Bajaj Auto","Titan",
+        "JSW Steel","UltraTech","BEL","Adani Enterprises",
     ],
-    "🏦 Banking":  ["HDFC Bank","ICICI Bank","SBI","Kotak Bank",
-                    "Axis Bank","IndusInd Bank","Bajaj Finance",
-                    "PNB","Bank of Baroda","Canara Bank",
-                    "Federal Bank","IDFC First"],
-    "💻 IT":       ["TCS","Infosys","Wipro","HCL Tech",
-                    "Tech Mahindra","Persistent","Coforge",
-                    "LTIMindtree"],
-    "🛢️ Energy":  ["Reliance","ONGC","Indian Oil","BPCL",
-                    "NTPC","Power Grid","Tata Power","Gail"],
-    "🚗 Auto":     ["Tata Motors DVR","Maruti","M&M","Hero MotoCorp",
-                    "Bajaj Auto","TVS Motor","Eicher Motors"],
-    "💊 Pharma":   ["Sun Pharma","Dr Reddy","Cipla",
-                    "Divi's Lab","Lupin","Apollo Hosp"],
-    "🛒 FMCG":     ["HUL","ITC","Nestle","Britannia",
-                    "Dabur","Tata Consumer"],
-    "⚙️ Metals":   ["Tata Steel","JSW Steel","Hindalco",
-                    "Coal India","Vedanta","SAIL"],
-    "🛡️ Defence":  ["HAL","BEL","Mazagon Dock","RVNL","IRFC"],
+    "🏦 Banking": [
+        "HDFC Bank","ICICI Bank","SBI","Kotak Bank",
+        "Axis Bank","IndusInd Bank","Bajaj Finance",
+        "PNB","Bank of Baroda","Canara Bank",
+        "Federal Bank","IDFC First","Bajaj Finserv",
+        "Yes Bank","Shriram Finance","Muthoot Finance",
+    ],
+    "💻 IT": [
+        "TCS","Infosys","Wipro","HCL Tech",
+        "Tech Mahindra","Persistent","Coforge",
+        "LTIMindtree","Mphasis","Tata Elxsi","KPIT Tech",
+    ],
+    "🛢️ Energy & Power": [
+        "Reliance","ONGC","Indian Oil","BPCL",
+        "NTPC","Power Grid","Adani Green","Adani Power",
+        "Tata Power","Gail","NHPC","JSW Energy",
+        "Torrent Power","Coal India",
+    ],
+    "🚗 Auto": [
+        "Maruti","M&M","Hero MotoCorp","Bajaj Auto",
+        "TVS Motor","Eicher Motors","Ashok Leyland",
+        "Tata Motors","Bosch","MRF","Apollo Tyres",
+    ],
+    "💊 Pharma": [
+        "Sun Pharma","Dr Reddy","Cipla","Divi's Lab",
+        "Lupin","Apollo Hosp","Mankind Pharma",
+        "Zydus Life","Torrent Pharma","Aurobindo",
+    ],
+    "🛒 FMCG": [
+        "HUL","ITC","Nestle","Britannia","Dabur",
+        "Tata Consumer","Marico","Colgate","Emami",
+    ],
+    "⚙️ Metals": [
+        "Tata Steel","JSW Steel","Hindalco","Vedanta",
+        "SAIL","NMDC","Jindal Steel","Hindustan Zinc",
+    ],
+    "🛡️ Defence": [
+        "HAL","BEL","Mazagon Dock","RVNL","IRFC",
+        "IRCTC","BEML","Cochin Shipyard","Garden Reach","BDL",
+    ],
+    "🏗️ Infra & Cement": [
+        "L&T","UltraTech","DLF","Adani Ports",
+        "Godrej Properties","ACC","Ambuja Cement",
+        "Shree Cement","Prestige Estate",
+    ],
+    "⚡ Adani Group": [
+        "Adani Ports","Adani Enterprises","Adani Green",
+        "Adani Power","Adani Total Gas","Adani Energy",
+    ],
+    "🔬 Chemicals": [
+        "Asian Paints","Pidilite","SRF","Navin Fluorine",
+        "Deepak Nitrite","Atul Ltd",
+    ],
+    "🏭 Capital Goods": [
+        "Siemens","ABB India","Havells","Thermax",
+        "Cummins","Bharat Forge","Crompton",
+    ],
 }
 
 LOT_SIZES = {
@@ -722,6 +909,34 @@ def get_news(q: str) -> list:
         return out
     except:
         return []
+
+
+# ══════════════════════════════════════════════════════════
+# TELEGRAM HELPER  (global — used by scanner + test button)
+# ══════════════════════════════════════════════════════════
+def send_telegram(token: str, chat_id: str,
+                  message: str) -> bool:
+    """Sends message via official Telegram Bot API."""
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id":    str(chat_id).strip(),
+                "text":       message,
+                "parse_mode": "HTML"
+            },
+            timeout=10
+        )
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+def tg_configured() -> bool:
+    """True if token + chat_id are saved in session state."""
+    return (
+        bool(st.session_state.get("tg_token_saved", "")) and
+        bool(st.session_state.get("tg_chat_saved",  ""))
+    )
 
 # ══════════════════════════════════════════════════════════
 # SIGNAL ENGINE  (indicators + 11-factor checklist)
@@ -1084,26 +1299,27 @@ tmsg   = {"best":"✅ BEST TIME — 9:30–10:30 AM",
 
 st.markdown(f"""
 <div style='background:linear-gradient(135deg,#1e3a5f,#1d4ed8);
-     border-radius:12px;padding:14px 22px;
-     display:flex;justify-content:space-between;
-     align-items:center;margin-bottom:12px;flex-wrap:wrap;
-     gap:8px;box-shadow:0 4px 12px rgba(29,78,216,0.25)'>
-  <span style='font-size:18px;font-weight:700;color:#ffffff;
-               letter-spacing:-0.3px'>
-      🎯 Intraday &amp; Options Terminal
-  </span>
-  <span style='background:{"rgba(22,163,74,0.25)" if mopen else "rgba(220,38,38,0.25)"};
-               color:{"#86efac" if mopen else "#fca5a5"};
-               font-weight:700;padding:4px 12px;
-               border-radius:20px;font-size:13px;
-               border:1px solid {"#86efac44" if mopen else "#fca5a544"}'>
-      {"🟢 MARKET OPEN" if mopen else "🔴 MARKET CLOSED"}
-  </span>
-  <span style='color:#93c5fd;font-weight:600;
-               font-size:13px'>{tmsg}</span>
-  <span style='color:#bfdbfe;font-size:12px'>
-      🕐 {n.strftime("%d %b %Y  %H:%M IST")}
-  </span>
+     border-radius:12px;padding:12px 16px;
+     margin-bottom:10px;
+     box-shadow:0 4px 12px rgba(29,78,216,0.25)'>
+  <div style='display:flex;justify-content:space-between;
+       align-items:center;flex-wrap:wrap;gap:6px'>
+    <span style='font-size:16px;font-weight:700;
+                 color:#ffffff;letter-spacing:-0.3px'>
+        🎯 Intraday &amp; Options Terminal
+    </span>
+    <span style='background:{"rgba(22,163,74,0.3)" if mopen else "rgba(220,38,38,0.3)"};
+                 color:{"#86efac" if mopen else "#fca5a5"};
+                 font-weight:700;padding:3px 10px;
+                 border-radius:20px;font-size:12px'>
+        {"🟢 OPEN" if mopen else "🔴 CLOSED"}
+    </span>
+    <span style='color:#93c5fd;font-weight:600;
+                 font-size:12px'>{tmsg}</span>
+    <span style='color:#bfdbfe;font-size:11px'>
+        🕐 {n.strftime("%d %b  %H:%M IST")}
+    </span>
+  </div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1317,6 +1533,82 @@ stick = st.session_state["st"]
 # ══════════════════════════════════════════════════════════
 T1,T2,T3,T4,T5,T6,T7 = st.tabs(TAB_NAMES)
 
+# ── Reusable inline stock search widget ──────────────────
+def inline_stock_search(tab_key: str):
+    """
+    Shows a compact search box + sector picker inline.
+    Returns True if a new stock was selected.
+    """
+    changed = False
+    sc1, sc2, sc3 = st.columns([3, 2, 1])
+    with sc1:
+        q = st.text_input(
+            "Search stock",
+            placeholder="Adani Ports, TCS, NIFTY...",
+            key=f"inline_srch_{tab_key}",
+            label_visibility="collapsed"
+        )
+        if q:
+            hits = {k:v for k,v in STOCKS.items()
+                    if q.strip().lower() in k.lower()
+                    or q.strip().lower() in v.lower()}
+            if hits:
+                pick = st.selectbox(
+                    "Results",
+                    list(hits.keys()),
+                    key=f"inline_pick_{tab_key}",
+                    label_visibility="collapsed"
+                )
+                if st.button(
+                    "Load",
+                    key=f"inline_load_{tab_key}",
+                    type="primary"
+                ):
+                    st.session_state["sn"] = pick
+                    st.session_state["st"] = hits[pick]
+                    changed = True
+                    st.rerun()
+            elif q:
+                st.caption("No results found")
+    with sc2:
+        sector_opts = [""] + list(SECTORS.keys())
+        chosen_sec  = st.selectbox(
+            "Sector",
+            sector_opts,
+            key=f"inline_sec_{tab_key}",
+            label_visibility="collapsed",
+            format_func=lambda x: "Browse by sector..." if x=="" else x
+        )
+        if chosen_sec:
+            sec_stocks = SECTORS[chosen_sec]
+            chosen_st  = st.selectbox(
+                "Stock",
+                sec_stocks,
+                key=f"inline_sec_st_{tab_key}",
+                label_visibility="collapsed"
+            )
+            if st.button(
+                "Load",
+                key=f"inline_sec_load_{tab_key}",
+                type="primary"
+            ):
+                st.session_state["sn"] = chosen_st
+                st.session_state["st"] = STOCKS.get(
+                    chosen_st, ""
+                )
+                changed = True
+                st.rerun()
+    with sc3:
+        st.markdown(
+            f"<div style='padding:6px 0;font-size:13px;"
+            f"color:#64748b'>"
+            f"📍 <b style='color:#1e293b'>"
+            f"{st.session_state.get('sn','NIFTY 50')}"
+            f"</b></div>",
+            unsafe_allow_html=True
+        )
+    return changed
+
 # ╔══════════════════════════════════════════════════════╗
 # ║  TAB 1 — WATCHLIST                                  ║
 # ╚══════════════════════════════════════════════════════╝
@@ -1446,6 +1738,19 @@ with T1:
 # ║  TAB 2 — TRADE SETUP                                ║
 # ╚══════════════════════════════════════════════════════╝
 with T2:
+    # ── Inline stock search ───────────────────────────────
+    st.markdown(
+        "<div style='background:#f0f9ff;border:1px solid "
+        "#bae6fd;border-radius:10px;padding:10px 14px;"
+        "margin-bottom:12px'>"
+        "<span style='font-size:13px;color:#0369a1;"
+        "font-weight:600'>🔍 Search or browse stocks</span>"
+        "</div>",
+        unsafe_allow_html=True
+    )
+    inline_stock_search("t2")
+    st.markdown("---")
+
     # ── Live price card ───────────────────────────────────
     lp = live_price(stick)
     if lp["ok"]:
@@ -2047,10 +2352,18 @@ with T3:
     }
 
     # ── Telegram setup ────────────────────────────────────
+    # Show configured badge if already set
+    if tg_configured():
+        st.success(
+            "📱 Telegram configured ✅ — "
+            "Alerts will fire automatically at score "
+            f"{st.session_state.get('alert_sc_val', 8)}+. "
+            "Expand below to change settings."
+        )
     st.markdown("#### 📱 Telegram Alert Setup")
     with st.expander(
         "Configure Telegram alerts — click to setup",
-        expanded=False
+        expanded=not tg_configured()
     ):
         st.markdown("""
         **Your own private Telegram bot — 100% free, no third party.**
@@ -2074,60 +2387,104 @@ with T3:
         **Step 3 — Enter both below and test:**
         """)
 
-        tg1, tg2 = st.columns(2)
-        with tg1:
-            tg_token = st.text_input(
-                "Bot Token",
-                placeholder="7123456789:AAHxxxxxxxxxxx",
-                type="password",
-                key="tg_token",
-                help="From @BotFather on Telegram"
-            )
-        with tg2:
-            tg_chat = st.text_input(
-                "Your Chat ID",
-                placeholder="987654321",
-                key="tg_chat",
-                help="From @userinfobot on Telegram"
-            )
+        # ── Input fields ──────────────────────────────
+        tg_token = st.text_input(
+            "Step 1 — Paste your Bot Token here",
+            placeholder="7123456789:AAHxxxxxxxxxxx",
+            type="password",
+            key="tg_token",
+            help="Get this from @BotFather on Telegram"
+        )
+        tg_chat = st.text_input(
+            "Step 2 — Paste your Chat ID here",
+            placeholder="987654321",
+            key="tg_chat",
+            help="Get this from @userinfobot on Telegram"
+        )
 
-        if tg_token and tg_chat:
-            if st.button("Send Test Message", key="tg_test",
-                         type="primary"):
-                try:
-                    test_url = (
-                        f"https://api.telegram.org/bot{tg_token}"
-                        f"/sendMessage"
-                    )
-                    resp = requests.post(test_url, json={
-                        "chat_id": tg_chat,
-                        "text": (
-                            "Trading Terminal connected! "
-                            "You will now receive trade signals here. "
-                            "Score 8+ signals will be sent automatically."
-                        ),
-                        "parse_mode": "HTML"
-                    }, timeout=10)
-                    if resp.status_code == 200:
-                        st.success(
-                            "Test message sent! "
-                            "Check your Telegram."
-                        )
-                        st.session_state["tg_token_saved"] = tg_token
-                        st.session_state["tg_chat_saved"]  = tg_chat
-                    else:
-                        err = resp.json().get("description","")
-                        st.error(f"Failed: {err}. Check token and chat ID.")
-                except Exception as e:
-                    st.error(f"Error: {e}")
-            else:
-                st.session_state["tg_token_saved"] = tg_token
-                st.session_state["tg_chat_saved"]  = tg_chat
-                st.success(
-                    "Telegram configured. "
-                    "Click Test to verify, "
-                    "then alerts will fire automatically at score 8+."
+        # ── Save credentials whenever typed ───────────
+        if tg_token:
+            st.session_state["tg_token_saved"] = tg_token
+        if tg_chat:
+            st.session_state["tg_chat_saved"] = tg_chat
+
+        st.markdown("---")
+
+        # ── Test button — always visible ───────────────
+        st.markdown(
+            "<div style='font-size:13px;color:#374151;"
+            "margin-bottom:8px'>"
+            "Step 3 — Click the button below to verify "
+            "your connection:</div>",
+            unsafe_allow_html=True
+        )
+
+        if st.button(
+            "📲 Send Test Message to Telegram",
+            key="tg_test",
+            type="primary",
+            use_container_width=True
+        ):
+            tok = (tg_token or
+                   st.session_state.get("tg_token_saved",""))
+            cid = (tg_chat or
+                   st.session_state.get("tg_chat_saved",""))
+
+            if not tok or not cid:
+                st.error(
+                    "❌ Please enter both Bot Token "
+                    "and Chat ID above first."
                 )
+            else:
+                with st.spinner("Sending test message..."):
+                    ok = send_telegram(
+                        tok, cid,
+                        "🎯 <b>Trading Terminal Connected!</b>\n"
+                        "You will now receive trade signals here.\n"
+                        "Alerts fire automatically when score 8+."
+                    )
+                if ok:
+                    st.session_state["tg_token_saved"] = tok
+                    st.session_state["tg_chat_saved"]  = cid
+                    st.success(
+                        "✅ Test message sent successfully! "
+                        "Check your Telegram now. "
+                        "Alerts are now active."
+                    )
+                    st.balloons()
+                else:
+                    # Try to get specific error
+                    try:
+                        resp = requests.post(
+                            f"https://api.telegram.org/bot{tok}"
+                            f"/sendMessage",
+                            json={"chat_id": cid,
+                                  "text": "test"},
+                            timeout=10
+                        )
+                        err = resp.json().get(
+                            "description", resp.text
+                        )
+                    except Exception as e:
+                        err = str(e)
+                    st.error(
+                        f"❌ Failed: {err}\n\n"
+                        "**Common fixes:**\n"
+                        "1. Open Telegram → find your bot "
+                        "→ press START\n"
+                        "2. Chat ID must be a plain number "
+                        "from @userinfobot\n"
+                        "3. Token format: "
+                        "`1234567890:AAHxxxxxxxx`"
+                    )
+
+        # Show current status
+        if tg_configured():
+            st.success(
+                "✅ Telegram is configured and active. "
+                "You will receive alerts when scanner "
+                "finds score 8+ signals."
+            )
 
     st.markdown("---")
 
@@ -2181,23 +2538,7 @@ with T3:
         key="auto_scan"
     )
 
-    # ── Helper: send Telegram ─────────────────────────────
-    def send_telegram(token, chat_id, message):
-        """
-        Sends a message via your private Telegram bot.
-        Uses official Telegram Bot API — no third party.
-        """
-        try:
-            url  = (f"https://api.telegram.org/bot{token}"
-                    f"/sendMessage")
-            resp = requests.post(url, json={
-                "chat_id":    chat_id,
-                "text":       message,
-                "parse_mode": "HTML"
-            }, timeout=8)
-            return resp.status_code == 200
-        except:
-            return False
+    # send_telegram is now a global function
 
     # ── Run scanner ────────────────────────────────────────
     def get_option_levels(price: float, direction: str) -> dict:
@@ -2501,8 +2842,13 @@ with T3:
 
             if alerted:
                 st.success(
-                    f"Telegram alerts sent for: "
+                    f"📱 Telegram alerts sent for: "
                     f"{', '.join(alerted)}"
+                )
+            elif not tg_configured():
+                st.info(
+                    "💡 Setup Telegram alerts above "
+                    "to get phone notifications for strong signals."
                 )
 
             st.markdown(f"*Scanned at "
@@ -2868,6 +3214,19 @@ with T4:
         "Random Forest + Gradient Boosting. "
         "Predicts next 3-candle direction."
     )
+
+    # ── Inline stock search ───────────────────────────────
+    st.markdown(
+        "<div style='background:#f0f9ff;border:1px solid "
+        "#bae6fd;border-radius:10px;padding:10px 14px;"
+        "margin-bottom:12px'>"
+        "<span style='font-size:13px;color:#0369a1;"
+        "font-weight:600'>🔍 Search or browse stocks</span>"
+        "</div>",
+        unsafe_allow_html=True
+    )
+    inline_stock_search("t4")
+    st.markdown("---")
 
     # ── Stock info bar ─────────────────────────────────
     ml_lp = live_price(stick)

@@ -33,6 +33,49 @@ st.set_page_config(
 )
 IST = pytz.timezone("Asia/Kolkata")
 
+# ── Persistent credential storage using JSON file ─────────
+import json, os
+
+CREDS_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    ".trading_creds.json"
+)
+
+def load_creds():
+    """Load saved credentials from local JSON file."""
+    try:
+        if os.path.exists(CREDS_FILE):
+            with open(CREDS_FILE, "r") as f:
+                data = json.load(f)
+            # Load into session state if not already set
+            if ("tg_token_saved" not in st.session_state
+                    and data.get("tg_token")):
+                st.session_state["tg_token_saved"] = (
+                    data["tg_token"]
+                )
+            if ("tg_chat_saved" not in st.session_state
+                    and data.get("tg_chat")):
+                st.session_state["tg_chat_saved"] = (
+                    data["tg_chat"]
+                )
+    except Exception:
+        pass
+
+def save_creds(token: str, chat: str):
+    """Save credentials to local JSON file permanently."""
+    try:
+        with open(CREDS_FILE, "w") as f:
+            json.dump({
+                "tg_token": token,
+                "tg_chat":  chat
+            }, f)
+        return True
+    except Exception:
+        return False
+
+# Load credentials on every page load
+load_creds()
+
 # ── URL-based tab routing ──────────────────────────────────
 # Each tab has a URL: ?tab=watchlist, ?tab=setup, etc.
 # This allows opening any tab in a separate browser window
@@ -2315,40 +2358,22 @@ with T2:
 with T3:
     st.markdown("### 🔍 Auto Scanner — 30 Stocks Live")
     st.caption(
-        "Scans up to 30 stocks simultaneously every few minutes. "
-        "Scans 30 stocks simultaneously. Sends Telegram alerts when strong signals fire."
+        "Scans stocks simultaneously across sectors. "
+        "Click Scan, review results, then manually send signals to Telegram."
     )
 
-    # ── Scanner stock universe ─────────────────────────────
+    # ── Scanner stock universe — uses same SECTORS as watchlist ──
     SCANNER_UNIVERSE = {
-        "🏆 Top 30 F&O": [
-            "NIFTY 50","BANK NIFTY","Reliance","HDFC Bank",
-            "ICICI Bank","TCS","Infosys","SBI","Wipro",
-            "Bajaj Finance","ITC","Sun Pharma","L&T","Maruti",
-            "Coal India","NTPC","Bharti Airtel","Tata Steel",
-            "Axis Bank","HCL Tech","Power Grid","Adani Ports",
-            "Hindalco","ONGC","Bajaj Auto","Titan","Grasim",
-            "JSW Steel","UltraTech","BEL"
+        k: v for k, v in SECTORS.items()
+    }
+    # Add a "All Sectors" option
+    SCANNER_UNIVERSE = {
+        "🌐 All Sectors (top 5 each)": [
+            stock
+            for sector_stocks in list(SECTORS.values())
+            for stock in sector_stocks[:5]
         ],
-        "🏦 Banking 15": [
-            "HDFC Bank","ICICI Bank","SBI","Kotak Bank",
-            "Axis Bank","IndusInd Bank","Bajaj Finance",
-            "PNB","Bank of Baroda","Canara Bank",
-            "Federal Bank","IDFC First","Bajaj Finserv",
-            "Yes Bank","HDFC Bank"
-        ],
-        "💻 IT 12": [
-            "TCS","Infosys","Wipro","HCL Tech",
-            "Tech Mahindra","Persistent","Coforge",
-            "LTIMindtree","Mphasis","Tata Elxsi",
-            "L&T","KPIT Tech"
-        ],
-        "🚗 Auto + Energy 15": [
-            "Tata Motors DVR","Maruti","M&M","Hero MotoCorp",
-            "Bajaj Auto","TVS Motor","Eicher Motors",
-            "Reliance","ONGC","Indian Oil","BPCL",
-            "NTPC","Power Grid","Tata Power","Gail"
-        ],
+        **SECTORS
     }
 
     # ── Telegram setup ────────────────────────────────────
@@ -2356,9 +2381,8 @@ with T3:
     if tg_configured():
         st.success(
             "📱 Telegram configured ✅ — "
-            "Alerts will fire automatically at score "
-            f"{st.session_state.get('alert_sc_val', 8)}+. "
-            "Expand below to change settings."
+            "Use the Send buttons on each signal card to "
+            "send alerts manually. Expand below to change settings."
         )
     st.markdown("#### 📱 Telegram Alert Setup")
     with st.expander(
@@ -2387,16 +2411,31 @@ with T3:
         **Step 3 — Enter both below and test:**
         """)
 
-        # ── Input fields ──────────────────────────────
+        # ── Input fields (pre-filled if saved) ────────
+        saved_token = st.session_state.get(
+            "tg_token_saved", ""
+        )
+        saved_chat  = st.session_state.get(
+            "tg_chat_saved", ""
+        )
+
+        if saved_token and saved_chat:
+            st.success(
+                "✅ Telegram credentials loaded from saved file. "
+                "You don't need to re-enter them."
+            )
+
         tg_token = st.text_input(
-            "Step 1 — Paste your Bot Token here",
+            "Step 1 — Bot Token",
+            value=saved_token,
             placeholder="7123456789:AAHxxxxxxxxxxx",
             type="password",
             key="tg_token",
             help="Get this from @BotFather on Telegram"
         )
         tg_chat = st.text_input(
-            "Step 2 — Paste your Chat ID here",
+            "Step 2 — Chat ID",
+            value=saved_chat,
             placeholder="987654321",
             key="tg_chat",
             help="Get this from @userinfobot on Telegram"
@@ -2407,6 +2446,9 @@ with T3:
             st.session_state["tg_token_saved"] = tg_token
         if tg_chat:
             st.session_state["tg_chat_saved"] = tg_chat
+        # Auto-save both if both are filled
+        if tg_token and tg_chat:
+            save_creds(tg_token, tg_chat)
 
         st.markdown("---")
 
@@ -2441,15 +2483,19 @@ with T3:
                         tok, cid,
                         "🎯 <b>Trading Terminal Connected!</b>\n"
                         "You will now receive trade signals here.\n"
-                        "Alerts fire automatically when score 8+."
+                        "Use Send buttons in the scanner to send signals manually."
                     )
                 if ok:
                     st.session_state["tg_token_saved"] = tok
                     st.session_state["tg_chat_saved"]  = cid
+                    # Save permanently to file
+                    saved = save_creds(tok, cid)
                     st.success(
-                        "✅ Test message sent successfully! "
-                        "Check your Telegram now. "
-                        "Alerts are now active."
+                        "✅ Test message sent! "
+                        "Check your Telegram. "
+                        "Credentials saved permanently — "
+                        "you won't need to enter them again."
+                        + (" 💾" if saved else "")
                     )
                     st.balloons()
                 else:
@@ -2489,7 +2535,7 @@ with T3:
     st.markdown("---")
 
     # ── Scanner controls ───────────────────────────────────
-    sc1, sc2, sc3, sc4 = st.columns([2,1,1,1])
+    sc1, sc2 = st.columns([2, 1])
     with sc1:
         scan_group = st.selectbox(
             "Stock group to scan",
@@ -2503,19 +2549,31 @@ with T3:
             index=0,
             key="scan_tf"
         )
-    with sc3:
+
+    sl1, sl2 = st.columns(2)
+    with sl1:
         min_score_scan = st.slider(
-            "Min score",
-            0, 10, 6,
-            key="min_score_scan"
+            "Minimum score to show",
+            min_value=0,
+            max_value=10,
+            value=6,
+            key="min_score_scan",
+            help="Only show stocks with score above this"
         )
-    with sc4:
-        alert_score = st.slider(
-            "Alert at score",
-            6, 10, 8,
-            key="alert_score",
-            help="Send Telegram alert when score reaches this"
+    with sl2:
+        min_combined_scan = st.slider(
+            "Minimum combined score",
+            min_value=0,
+            max_value=10,
+            value=5,
+            key="min_combined_scan",
+            help=(
+                "Combined = 60% technical + 40% historical. "
+                "Higher = more consistent signal."
+            )
         )
+
+    alert_score = min_score_scan  # used for display only
 
     # Mobile-friendly controls - stack vertically on small screens
     run_scanner = st.button(
@@ -2770,32 +2828,7 @@ with T3:
                 }
                 results.append(result)
 
-                # Telegram alert
-                if (best >= alert_sc and
-                        "tg_token_saved" in st.session_state
-                        and "tg_chat_saved" in
-                        st.session_state):
-                    tkn = st.session_state["tg_token_saved"]
-                    cid = st.session_state["tg_chat_saved"]
-                    if tkn and cid:
-                        msg = (
-                            f"<b>{sname}</b> — {action}\n"
-                            f"Score: {best}/10 | "
-                            f"Combined: {combined}/10\n"
-                            f"Reliability: {hist['reliability']}\n"
-                            f"Price: Rs {sig['cp']:,.2f}\n"
-                            f"Entry: Rs {sig['e9v']:,.2f}\n"
-                            f"SL: Rs {sl_v:,.2f}\n"
-                            f"T1: Rs {t1_v:,.2f} | "
-                            f"T2: Rs {t2_v:,.2f}\n"
-                            f"ATM: {opt['ATM']} | "
-                            f"ITM: {opt['ITM']} | "
-                            f"OTM: {opt['OTM']}\n"
-                            f"RSI: {sig['rv']:.1f} | "
-                            f"R:R {rr}:1"
-                        )
-                        if send_telegram(tkn, cid, msg):
-                            alerted.append(sname)
+                # No auto alerts — user sends manually
 
             except Exception:
                 continue
@@ -2816,6 +2849,13 @@ with T3:
                 stocks_to_scan, scan_tf,
                 min_score_scan, alert_score
             )
+        # Filter by combined score
+        if "min_combined_scan" in st.session_state:
+            results = [
+                r for r in results
+                if r.get("Combined", 0) >=
+                st.session_state["min_combined_scan"]
+            ]
 
         if not results:
             st.warning(
@@ -2840,16 +2880,7 @@ with T3:
             sm4.metric("BUY CE",     len(ce_list))
             sm5.metric("BUY PE",     len(pe_list))
 
-            if alerted:
-                st.success(
-                    f"📱 Telegram alerts sent for: "
-                    f"{', '.join(alerted)}"
-                )
-            elif not tg_configured():
-                st.info(
-                    "💡 Setup Telegram alerts above "
-                    "to get phone notifications for strong signals."
-                )
+
 
             st.markdown(f"*Scanned at "
                         f"{now_ist().strftime('%H:%M:%S IST')} | "
@@ -2868,14 +2899,59 @@ with T3:
 
             if strong_r:
                 st.markdown("---")
-                st.markdown(
-                    f"### 🔥 STRONG SIGNALS — "
-                    f"{len(strong_r)} found"
-                )
-                st.caption(
-                    "Confirmed by both technical score AND "
-                    "historical consistency. Highest priority."
-                )
+                sh1, sh2 = st.columns([3, 1])
+                with sh1:
+                    st.markdown(
+                        f"### 🔥 STRONG SIGNALS — "
+                        f"{len(strong_r)} found"
+                    )
+                    st.caption(
+                        "Confirmed by both technical score AND "
+                        "historical consistency. Highest priority."
+                    )
+                with sh2:
+                    if tg_configured():
+                        if st.button(
+                            "📱 Send All to Telegram",
+                            key="scan_tg_all",
+                            type="primary",
+                            use_container_width=True
+                        ):
+                            tok = st.session_state.get(
+                                "tg_token_saved", ""
+                            )
+                            cid = st.session_state.get(
+                                "tg_chat_saved", ""
+                            )
+                            sent_count = 0
+                            for r_all in strong_r:
+                                msg_all = (
+                                    f"<b>{r_all['Stock']}</b>"
+                                    f" — {r_all['Action']}\n"
+                                    f"Score: {r_all['Score']}/10"
+                                    f" | Combined: "
+                                    f"{r_all['Combined']}/10\n"
+                                    f"Price: Rs "
+                                    f"{r_all['Price']:,.2f}\n"
+                                    f"Entry: Rs "
+                                    f"{r_all['Entry']:,.2f} | "
+                                    f"SL: Rs {r_all['SL']:,.2f}\n"
+                                    f"T1: Rs {r_all['T1']:,.2f}"
+                                    f" | T2: Rs "
+                                    f"{r_all['T2']:,.2f}\n"
+                                    f"ATM: {r_all['ATM']}"
+                                )
+                                if send_telegram(tok, cid,
+                                                 msg_all):
+                                    sent_count += 1
+                            st.success(
+                                f"✅ Sent {sent_count}/"
+                                f"{len(strong_r)} signals!"
+                            )
+                    else:
+                        st.caption(
+                            "Setup Telegram above to enable"
+                        )
 
                 for r in strong_r:
                     dir_col  = ("#16a34a"
@@ -3027,19 +3103,69 @@ with T3:
                         unsafe_allow_html=True
                     )
 
-                    # Analyse button below card
-                    if st.button(
-                        f"Deep Analyse {r['Stock']} →",
-                        key=f"scan_an_{r['Stock']}",
-                        type="primary",
-                        use_container_width=True
-                    ):
-                        st.session_state["sn"] = r["Stock"]
-                        st.session_state["st"] = r["Sym"]
-                        st.rerun()
+                    # Action buttons below card
+                    btn_c1, btn_c2 = st.columns(2)
+
+                    with btn_c1:
+                        if st.button(
+                            f"📊 Analyse {r['Stock']}",
+                            key=f"scan_an_{r['Stock']}",
+                            type="primary",
+                            use_container_width=True
+                        ):
+                            st.session_state["sn"] = r["Stock"]
+                            st.session_state["st"] = r["Sym"]
+                            st.rerun()
+
+                    with btn_c2:
+                        if st.button(
+                            f"📱 Send to Telegram",
+                            key=f"scan_tg_{r['Stock']}",
+                            use_container_width=True,
+                            disabled=not tg_configured()
+                        ):
+                            tok = st.session_state.get(
+                                "tg_token_saved", ""
+                            )
+                            cid = st.session_state.get(
+                                "tg_chat_saved", ""
+                            )
+                            msg = (
+                                f"<b>{r['Stock']}</b> — "
+                                f"{r['Action']}\n"
+                                f"Score: {r['Score']}/10 | "
+                                f"Combined: {r['Combined']}/10\n"
+                                f"Reliability: {r['Reliability']}\n"
+                                f"Price: Rs {r['Price']:,.2f}\n"
+                                f"Entry: Rs {r['Entry']:,.2f}\n"
+                                f"SL: Rs {r['SL']:,.2f}\n"
+                                f"T1: Rs {r['T1']:,.2f} | "
+                                f"T2: Rs {r['T2']:,.2f}\n"
+                                f"ATM: {r['ATM']} | "
+                                f"ITM: {r['ITM']} | "
+                                f"OTM: {r['OTM']}\n"
+                                f"RSI: {r['RSI']:.0f} | "
+                                f"R:R {r['RR']}:1"
+                            )
+                            if send_telegram(tok, cid, msg):
+                                st.success(
+                                    f"✅ Sent {r['Stock']} "
+                                    f"signal to Telegram!"
+                                )
+                            else:
+                                st.error(
+                                    "❌ Failed. Check Telegram "
+                                    "setup in scanner tab."
+                                )
+
+                    if not tg_configured():
+                        st.caption(
+                            "⚠️ Setup Telegram in the "
+                            "section above to enable alerts"
+                        )
 
                     st.markdown(
-                        "<div style='margin:6px 0'></div>",
+                        "<div style='margin:8px 0'></div>",
                         unsafe_allow_html=True
                     )
 

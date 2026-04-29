@@ -143,52 +143,147 @@ header[data-testid="stHeader"] {
     padding-top: 1rem !important;
 }
 
-/* ── Mobile responsive text ──────────────────────── */
+/* ── Mobile responsive — comprehensive fix ──────── */
 @media (max-width: 768px) {
+    /* Layout */
     .block-container {
-        padding-left: 0.5rem !important;
-        padding-right: 0.5rem !important;
+        padding-left: 0.4rem !important;
+        padding-right: 0.4rem !important;
+        padding-top: 0.3rem !important;
     }
-    /* Tabs scroll horizontally on mobile */
+
+    /* Top navigation bar — make visible on mobile */
+    header[data-testid="stHeader"] {
+        background: #1e3a5f !important;
+        border-bottom: 2px solid #1d4ed8 !important;
+    }
+    header[data-testid="stHeader"] * {
+        color: #ffffff !important;
+        fill: #ffffff !important;
+    }
+    /* Hamburger menu icon */
+    button[kind="header"] svg {
+        fill: #ffffff !important;
+        color: #ffffff !important;
+    }
+    [data-testid="stToolbar"] {
+        background: transparent !important;
+    }
+    [data-testid="stToolbar"] svg {
+        fill: #ffffff !important;
+    }
+    /* Make all header icons white */
+    header svg, header button {
+        color: #ffffff !important;
+        fill: #ffffff !important;
+        stroke: #ffffff !important;
+    }
+
+    /* Tabs — horizontal scroll, no wrap */
     .stTabs [data-baseweb="tab-list"] {
         overflow-x: auto !important;
         flex-wrap: nowrap !important;
         -webkit-overflow-scrolling: touch !important;
         scrollbar-width: none !important;
+        gap: 2px !important;
+        padding: 3px !important;
     }
     .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar {
         display: none !important;
     }
     .stTabs [data-baseweb="tab"] {
         white-space: nowrap !important;
-        font-size: 12px !important;
-        padding: 6px 10px !important;
+        font-size: 11px !important;
+        padding: 5px 8px !important;
         flex-shrink: 0 !important;
+        min-width: fit-content !important;
     }
-    /* Buttons full width on mobile */
-    .stButton button {
+    .stTabs [aria-selected="true"] {
+        font-size: 11px !important;
+    }
+
+    /* Headings */
+    h1 { font-size: 18px !important; }
+    h2 { font-size: 16px !important; }
+    h3 { font-size: 15px !important; }
+    h4 { font-size: 14px !important; }
+    p, .stMarkdown p {
         font-size: 13px !important;
-        padding: 8px 10px !important;
+        line-height: 1.5 !important;
     }
-    /* Metric cards smaller on mobile */
+    caption, .stCaption {
+        font-size: 11px !important;
+    }
+
+    /* Buttons */
+    .stButton button {
+        font-size: 12px !important;
+        padding: 7px 10px !important;
+        border-radius: 8px !important;
+    }
+
+    /* Metric cards */
     div[data-testid="metric-container"] {
-        padding: 10px 12px !important;
+        padding: 8px 10px !important;
+        border-radius: 8px !important;
     }
     div[data-testid="metric-container"] label {
-        font-size: 11px !important;
+        font-size: 10px !important;
     }
     div[data-testid="metric-container"]
         [data-testid="stMetricValue"] {
-        font-size: 18px !important;
-    }
-    /* Inputs full width */
-    .stTextInput input,
-    .stNumberInput input {
         font-size: 16px !important;
+        font-weight: 700 !important;
     }
-    /* Index cards smaller text */
-    .stMarkdown p {
+
+    /* Inputs — prevent iOS zoom */
+    .stTextInput input,
+    .stNumberInput input,
+    .stTextArea textarea,
+    .stSelectbox [data-baseweb="select"] div {
+        font-size: 16px !important;
+        border-radius: 8px !important;
+    }
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        min-width: 200px !important;
+        max-width: 260px !important;
+    }
+    section[data-testid="stSidebar"] .stButton button {
+        font-size: 12px !important;
+        padding: 6px 10px !important;
+    }
+
+    /* Plotly charts full width */
+    .js-plotly-plot {
+        width: 100% !important;
+    }
+
+    /* Expander */
+    .streamlit-expanderHeader {
         font-size: 13px !important;
+        padding: 8px 10px !important;
+    }
+
+    /* Alert boxes */
+    div[data-testid="stSuccess"],
+    div[data-testid="stWarning"],
+    div[data-testid="stError"],
+    div[data-testid="stInfo"] {
+        padding: 10px 14px !important;
+        font-size: 13px !important;
+        border-radius: 8px !important;
+    }
+
+    /* Dataframe */
+    .stDataFrame {
+        font-size: 11px !important;
+    }
+
+    /* Columns gap */
+    [data-testid="column"] {
+        padding: 0 2px !important;
     }
 }
 
@@ -733,6 +828,154 @@ STOCKS = {
     "Sun TV":           "SUNTV.NS",
     "Zee Entertainment":"ZEEL.NS",
     "PVR Inox":         "PVRINOX.NS",
+    # ── Additional Banking & NBFC ─────────────────────
+    "RBL Bank":         "RBLBANK.NS",
+    "Karnataka Bank":   "KTKBANK.NS",
+    "DCB Bank":         "DCBBANK.NS",
+    "Ujjivan Small":    "UJJIVANSFB.NS",
+    "Equitas Small":    "EQUITASBNK.NS",
+    "AU Small Finance": "AUBANK.NS",
+    "Cholamandalam":    "CHOLAFIN.NS",
+    "Mahindra Finance": "M&MFIN.NS",
+    "Piramal Enterprises":"PIRAMALENT.NS",
+    "Aditya Birla Cap": "ABCAPITAL.NS",
+    "Manappuram":       "MANAPPURAM.NS",
+    "IIFL Finance":     "IIFL.NS",
+    # ── Additional IT ─────────────────────────────────
+    "Oracle India":     "OFSS.NS",
+    "Wipro":            "WIPRO.NS",
+    "Hexaware":         "HEXAWARE.NS",
+    "Sonata Software":  "SONATSOFTW.NS",
+    "Mastek":           "MASTEK.NS",
+    "Tanla Platforms":  "TANLA.NS",
+    "Route Mobile":     "ROUTE.NS",
+    "Intellect Design": "INTELLECT.NS",
+    # ── Additional Pharma ─────────────────────────────
+    "Biocon":           "BIOCON.NS",
+    "Ipca Labs":        "IPCALAB.NS",
+    "Ajanta Pharma":    "AJANTPHARM.NS",
+    "Alembic Pharma":   "APLLTD.NS",
+    "Gland Pharma":     "GLAND.NS",
+    "Syngene":          "SYNGENE.NS",
+    "Aarti Drugs":      "AARTIDRUGS.NS",
+    "Laurus Labs":      "LAURUSLABS.NS",
+    "Granules India":   "GRANULES.NS",
+    "Suven Pharma":     "SUVENPHAR.NS",
+    # ── Additional FMCG & Consumer ────────────────────
+    "Varun Beverages":  "VBL.NS",
+    "United Breweries": "UBL.NS",
+    "Jubilant Food":    "JUBLFOOD.NS",
+    "Westlife Food":    "WESTLIFE.NS",
+    "Restaurant Brands":"RBASKETSS.NS",
+    "Devyani Intl":     "DEVYANI.NS",
+    "Bikaji Foods":     "BIKAJI.NS",
+    "Mrs Bectors":      "BECTORFOOD.NS",
+    "Radico Khaitan":   "RADICO.NS",
+    "Globus Spirits":   "GLOBUSSPR.NS",
+    # ── Additional Auto ───────────────────────────────
+    "Mahindra CIE":     "MAHINDCIE.NS",
+    "Endurance Tech":   "ENDURANCE.NS",
+    "Minda Corp":       "MINDACORP.NS",
+    "Suprajit Engg":    "SUPRAJIT.NS",
+    "Craftsman Auto":   "CRAFTSMAN.NS",
+    "Sona BLW":         "SONACOMS.NS",
+    "Uno Minda":        "UNOMINDA.NS",
+    # ── Additional Metals ─────────────────────────────
+    "Welspun Corp":     "WELCORP.NS",
+    "Ratnamani Metals": "RATNAMANI.NS",
+    "Mishra Dhatu":     "MIDHANI.NS",
+    "Gravita India":    "GRAVITA.NS",
+    "Hindustan Copper": "HINDCOPPER.NS",
+    # ── Textiles ──────────────────────────────────────
+    "Page Industries":  "PAGEIND.NS",
+    "Trident":          "TRIDENT.NS",
+    "Vardhman Textile": "VTL.NS",
+    "GHCL":             "GHCL.NS",
+    "KPR Mill":         "KPRMILL.NS",
+    "Welspun India":    "WELSPUNIND.NS",
+    # ── Real Estate & Construction ────────────────────
+    "NCC Ltd":          "NCC.NS",
+    "KNR Constructions":"KNRCON.NS",
+    "PNC Infratech":    "PNCINFRA.NS",
+    "IRB Infra":        "IRB.NS",
+    "Ashoka Buildcon":  "ASHOKA.NS",
+    "PSP Projects":     "PSPPROJECT.NS",
+    "Brigade Enterprises":"BRIGADE.NS",
+    "Sobha":            "SOBHA.NS",
+    "Signature Global": "SIGNATURE.NS",
+    # ── Power & Utilities ─────────────────────────────
+    "Tata Consultancy": "CESC.NS",
+    "CESC":             "CESC.NS",
+    "Torrent Power":    "TORNTPOWER.NS",
+    "GIPCL":            "GIPCL.NS",
+    "GE Vernova":       "GEVERNOVA.NS",
+    "Hitachi Energy":   "POWERINDIA.NS",
+    "KPI Green":        "KPIGREEN.NS",
+    "Waaree Energies":  "WAAREEENER.NS",
+    "Premier Energies": "PREMIERENS.NS",
+    # ── Agrochemicals & Fertilisers ───────────────────
+    "UPL":              "UPL.NS",
+    "PI Industries":    "PIIND.NS",
+    "Coromandel Intl":  "COROMANDEL.NS",
+    "Bayer Cropscience":"BAYERCROP.NS",
+    "Chambal Fert":     "CHAMBLFERT.NS",
+    "Rallis India":     "RALLIS.NS",
+    "Astec Lifesciences":"ASTEC.NS",
+    "Dhanuka Agritech": "DHANUKA.NS",
+    # ── Logistics & Shipping ──────────────────────────
+    "Container Corp":   "CONCOR.NS",
+    "VRL Logistics":    "VRLLOG.NS",
+    "TCI Express":      "TCIEXP.NS",
+    "Delhivery":        "DELHIVERY.NS",
+    "Blue Dart":        "BLUEDART.NS",
+    "Mahindra Logistics":"MAHLOG.NS",
+    "Gateway Distriparks":"GDL.NS",
+    "Shipping Corp":    "SCI.NS",
+    # ── Healthcare Devices & Hospitals ────────────────
+    "Narayana Hrudayalaya":"NH.NS",
+    "Fortis Healthcare":"FORTIS.NS",
+    "Krishna Institute":"KIMS.NS",
+    "Global Health":    "MEDANTA.NS",
+    "Aster DM":         "ASTERDM.NS",
+    "Poly Medicure":    "POLYMED.NS",
+    "Vijaya Diagnostic":"VIJAYA.NS",
+    # ── Specialty Finance ─────────────────────────────
+    "BSE Ltd":          "BSE.NS",
+    "CDSL":             "CDSL.NS",
+    "CAMS":             "CAMS.NS",
+    "KFintech":         "KFINTECH.NS",
+    "Angel One":        "ANGELONE.NS",
+    "5Paisa Capital":   "5PAISA.NS",
+    "MCX":              "MCX.NS",
+    "Multi Comm Exch":  "MCX.NS",
+    # ── Hotels & Tourism ──────────────────────────────
+    "EIH Ltd":          "EIHOTEL.NS",
+    "Lemon Tree":       "LEMONTREE.NS",
+    "Chalet Hotels":    "CHALET.NS",
+    "Mahindra Holidays":"MHRIL.NS",
+    "Thomas Cook":      "THOMASCOOK.NS",
+    # ── Retail ────────────────────────────────────────
+    "Titan":            "TITAN.NS",
+    "Kalyan Jewellers": "KALYANKJIL.NS",
+    "Senco Gold":       "SENCO.NS",
+    "PC Jeweller":      "PCJEWELLER.NS",
+    "Shopper Stop":     "SHOPERSTOP.NS",
+    "V-Mart Retail":    "VMART.NS",
+    "Aditya Birla Fash":"ABFRL.NS",
+    "Vedant Fashions":  "MANYAVAR.NS",
+    # ── Miscellaneous ─────────────────────────────────
+    "3M India":         "3MINDIA.NS",
+    "Honeywell Auto":   "HONAUT.NS",
+    "ABB India":        "ABB.NS",
+    "Thermax":          "THERMAX.NS",
+    "Triveni Turbine":  "TRITURBINE.NS",
+    "Lakshmi Machine":  "LMWLTD.NS",
+    "TD Power Systems": "TDPOWERSYS.NS",
+    "Elecon Engg":      "ELECON.NS",
+    "Rexnord Elect":    "REXNORD.NS",
+    "Kaynes Tech":      "KAYNES.NS",
+    "Syrma SGS":        "SYRMA.NS",
+    "Avalon Tech":      "AVALON.NS",
 }
 
 SECTORS = {
@@ -801,6 +1044,43 @@ SECTORS = {
     "🏭 Capital Goods": [
         "Siemens","ABB India","Havells","Thermax",
         "Cummins","Bharat Forge","Crompton",
+        "Kaynes Tech","Syrma SGS","Triveni Turbine",
+    ],
+    "🌾 Agro & Fertilisers": [
+        "UPL","PI Industries","Coromandel Intl",
+        "Chambal Fert","Rallis India","Dhanuka Agritech",
+    ],
+    "🚚 Logistics": [
+        "Container Corp","Delhivery","Blue Dart",
+        "VRL Logistics","TCI Express","Gateway Distriparks",
+    ],
+    "🏨 Hotels & Retail": [
+        "Indian Hotels","EIH Ltd","Lemon Tree",
+        "Titan","Kalyan Jewellers","Senco Gold",
+        "Vedant Fashions","DMart","Trent",
+    ],
+    "🏥 Healthcare": [
+        "Apollo Hosp","Narayana Hrudayalaya","Fortis Healthcare",
+        "Global Health","Aster DM","Max Healthcare",
+        "Krishna Institute","Vijaya Diagnostic",
+    ],
+    "💹 Broking & Exchanges": [
+        "BSE Ltd","CDSL","CAMS","Angel One","MCX",
+        "KFintech","5Paisa Capital",
+    ],
+    "🧵 Textiles": [
+        "Page Industries","Trident","Vardhman Textile",
+        "KPR Mill","Welspun India","GHCL",
+    ],
+    "☀️ Renewable Energy": [
+        "Adani Green","Adani Power","Tata Power",
+        "NHPC","JSW Energy","KPI Green",
+        "Waaree Energies","Premier Energies",
+    ],
+    "🏗️ Construction": [
+        "NCC Ltd","KNR Constructions","IRB Infra",
+        "Ashoka Buildcon","PSP Projects","RVNL",
+        "PNC Infratech","L&T",
     ],
 }
 
@@ -1034,6 +1314,51 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
         # OBV trend
         obv_bull = float(obv.iloc[-1]) > float(obv.iloc[-5])
 
+        # ── CPR (Central Pivot Range) ─────────────────────
+        # Uses previous day candle for CPR calculation
+        # If intraday tf: use previous completed session
+        prev_h = float(h.iloc[-2])
+        prev_l = float(l.iloc[-2])
+        prev_c = float(c.iloc[-2])
+
+        cpr_pivot = round((prev_h + prev_l + prev_c) / 3, 2)
+        cpr_bc    = round((prev_h + prev_l) / 2, 2)
+        cpr_tc    = round(cpr_pivot - cpr_bc + cpr_pivot, 2)
+
+        # Make sure TC > BC
+        if cpr_tc < cpr_bc:
+            cpr_tc, cpr_bc = cpr_bc, cpr_tc
+
+        cpr_width    = round(cpr_tc - cpr_bc, 2)
+        cpr_width_pct= round(cpr_width / cpr_pivot * 100, 2)
+
+        # CPR width classification
+        # Narrow = trending day, Wide = sideways day
+        if cpr_width_pct < 0.25:
+            cpr_type = "Narrow (Trending day expected)"
+        elif cpr_width_pct < 0.5:
+            cpr_type = "Moderate"
+        else:
+            cpr_type = "Wide (Sideways day expected)"
+
+        # Price position relative to CPR
+        if cp > cpr_tc:
+            cpr_position = "ABOVE"   # bullish
+            cpr_bias     = "Bullish"
+        elif cp < cpr_bc:
+            cpr_position = "BELOW"   # bearish
+            cpr_bias     = "Bearish"
+        else:
+            cpr_position = "INSIDE"  # sideways
+            cpr_bias     = "Sideways"
+
+        # Virgin CPR — price never touched yesterday's CPR
+        # (strong magnet for price today)
+        virgin_cpr = not (
+            float(l.iloc[-1]) <= cpr_tc and
+            float(h.iloc[-1]) >= cpr_bc
+        )
+
         # Support / Resistance
         window = 5
         s_lvls, r_lvls = [], []
@@ -1203,6 +1528,10 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
              rr_ratio >= 1.5,
              f"{rr_ratio}:1",
              "Reward must justify risk"),
+            ("9b. CPR — Price above CPR",
+             cpr_position == "ABOVE",
+             f"{cpr_bias} | {cpr_type[:8]}",
+             "Central Pivot Range bias must be bullish"),
             ("10. No Bearish Pattern",
              not any(p[1]=="bearish" for p in patterns),
              ", ".join(p[0] for p in patterns) or "None",
@@ -1251,6 +1580,10 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
              rr_ratio >= 1.5,
              f"{rr_ratio}:1",
              "Reward must justify risk"),
+            ("9b. CPR — Price above CPR",
+             cpr_position == "ABOVE",
+             f"{cpr_bias} | {cpr_type[:8]}",
+             "Central Pivot Range bias must be bullish"),
             ("10. No Bullish Pattern",
              not any(p[1]=="bullish" for p in patterns),
              ", ".join(p[0] for p in patterns) or "None",
@@ -1283,6 +1616,11 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
             ce_checklist=ce_checklist, pe_checklist=pe_checklist,
             ce_pass=ce_pass, pe_pass=pe_pass,
             good_time=good_time, time_state=tt,
+            # CPR
+            cpr_pivot=cpr_pivot, cpr_tc=cpr_tc, cpr_bc=cpr_bc,
+            cpr_width=cpr_width, cpr_width_pct=cpr_width_pct,
+            cpr_type=cpr_type, cpr_bias=cpr_bias,
+            cpr_position=cpr_position, virgin_cpr=virgin_cpr,
             # series
             e9s=e9, e21s=e21, e50s=e50,
             vwaps=vwap, rsis=rsi,
@@ -2216,6 +2554,36 @@ with T2:
         name="VWAP"
     ), row=1, col=1)
 
+    # CPR lines on chart
+    if sig:
+        # CPR TC (top)
+        fig.add_hline(
+            y=sig["cpr_tc"],
+            line_dash="dot", line_color="#f59e0b",
+            line_width=1.5, opacity=0.8,
+            annotation_text=f"CPR TC {sig['cpr_tc']:,}",
+            annotation_position="left",
+            row=1, col=1
+        )
+        # CPR Pivot
+        fig.add_hline(
+            y=sig["cpr_pivot"],
+            line_dash="solid", line_color="#f59e0b",
+            line_width=2, opacity=0.9,
+            annotation_text=f"Pivot {sig['cpr_pivot']:,}",
+            annotation_position="left",
+            row=1, col=1
+        )
+        # CPR BC (bottom)
+        fig.add_hline(
+            y=sig["cpr_bc"],
+            line_dash="dot", line_color="#f59e0b",
+            line_width=1.5, opacity=0.8,
+            annotation_text=f"CPR BC {sig['cpr_bc']:,}",
+            annotation_position="left",
+            row=1, col=1
+        )
+
     fig.add_trace(go.Scatter(
         x=plot_df.index, y=sig["bbus"].tail(100),
         line=dict(color="rgba(60,200,100,0.4)",
@@ -2343,6 +2711,65 @@ with T2:
     kl4.metric("EMA9",       f"₹{sig['e9v']:,.0f}")
     kl5.metric("EMA21",      f"₹{sig['e21v']:,.0f}")
     kl6.metric("ATR",        f"₹{sig['atrv']:,.1f}")
+
+    # CPR section
+    st.markdown("#### 🔄 CPR — Central Pivot Range")
+    cpr_col = (
+        "#16a34a" if sig["cpr_position"] == "ABOVE"
+        else "#dc2626" if sig["cpr_position"] == "BELOW"
+        else "#f59e0b"
+    )
+    cpr_bg = (
+        "#f0fdf4" if sig["cpr_position"] == "ABOVE"
+        else "#fef2f2" if sig["cpr_position"] == "BELOW"
+        else "#fffbeb"
+    )
+    cp1,cp2,cp3,cp4,cp5 = st.columns(5)
+    cp1.metric("CPR Pivot",  f"₹{sig['cpr_pivot']:,}")
+    cp2.metric("CPR Top (TC)",f"₹{sig['cpr_tc']:,}")
+    cp3.metric("CPR Bot (BC)",f"₹{sig['cpr_bc']:,}")
+    cp4.metric("CPR Width",  f"{sig['cpr_width_pct']:.2f}%")
+    cp5.metric("Bias",       sig["cpr_bias"])
+
+    st.markdown(
+        f"<div style='background:{cpr_bg};"
+        f"border:1.5px solid {cpr_col};"
+        f"border-radius:10px;padding:12px 18px;"
+        f"margin:8px 0;display:flex;gap:20px;"
+        f"flex-wrap:wrap;align-items:center'>"
+        f"<span style='font-size:16px;font-weight:700;"
+        f"color:{cpr_col}'>Price is {sig['cpr_position']} CPR</span>"
+        f"<span style='font-size:13px;color:#475569'>"
+        f"{sig['cpr_type']}</span>"
+        + ("<span style='background:#7c3aed;color:white;"
+           "padding:3px 10px;border-radius:12px;"
+           "font-size:12px'>✨ Virgin CPR</span>"
+           if sig['virgin_cpr'] else "")
+        + "</div>",
+        unsafe_allow_html=True
+    )
+
+    with st.expander("📖 How to use CPR"):
+        st.markdown("""
+        **CPR (Central Pivot Range)** is calculated from
+        yesterday's High, Low and Close.
+
+        | Position | Meaning | Trade |
+        |----------|---------|-------|
+        | Price **above** TC | Strong bullish | Buy CE |
+        | Price **inside** CPR | Sideways — avoid | Wait |
+        | Price **below** BC | Strong bearish | Buy PE |
+
+        **CPR Width tells you what kind of day to expect:**
+        - **Narrow CPR (< 0.25%)** — Strong trending day.
+          Big moves expected. Best for directional trades.
+        - **Wide CPR (> 0.5%)** — Choppy sideways day.
+          Avoid options. Wait for breakout.
+
+        **Virgin CPR** — Price never touched yesterday's CPR.
+        This acts as a strong magnet — price is likely to
+        come back and test it today. High probability level.
+        """)
 
     with st.expander("📋 Last 20 candles"):
         t20 = df.tail(20)[["Open","High","Low",
@@ -2825,6 +3252,12 @@ with T3:
                     "OTM":         opt["OTM"],
                     "Consist3":    hist["candles_3"],
                     "Consist5":    hist["candles_5"],
+                    # CPR
+                    "CPR_Bias":    sig.get("cpr_bias","—"),
+                    "CPR_Pos":     sig.get("cpr_position","—"),
+                    "CPR_Type":    sig.get("cpr_type","—"),
+                    "CPR_Pivot":   sig.get("cpr_pivot",0),
+                    "Virgin_CPR":  sig.get("virgin_cpr",False),
                 }
                 results.append(result)
 
@@ -3080,6 +3513,19 @@ with T3:
                         f"<div style='font-size:10px;color:#94a3b8'>"
                         f"4× ATR</div></div>"
 
+                        f"</div>"
+
+                        # Row 4b: CPR info
+                        f"<div style='background:"
+                        f"{'#f0fdf4' if r.get('CPR_Pos')=='ABOVE' else '#fef2f2' if r.get('CPR_Pos')=='BELOW' else '#fffbeb'};"
+                        f"border-radius:8px;padding:8px 14px;"
+                        f"margin-bottom:8px;font-size:13px'>"
+                        f"<b style='color:#7c3aed'>CPR</b> — "
+                        f"Price is <b>{r.get('CPR_Pos','—')}</b> "
+                        f"Central Pivot Range | "
+                        f"Bias: <b>{r.get('CPR_Bias','—')}</b> | "
+                        f"{r.get('CPR_Type','—')[:20]}"
+                        f"{'  ✨ <b>Virgin CPR</b>' if r.get('Virgin_CPR') else ''}"
                         f"</div>"
 
                         # Row 5: Options ATM/ITM/OTM

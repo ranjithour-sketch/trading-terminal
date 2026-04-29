@@ -2784,6 +2784,61 @@ with T2:
 
 with T3:
     st.markdown("### 🔍 Auto Scanner — 30 Stocks Live")
+
+    # ── Quick stock search inside scanner ────────────────
+    with st.expander("🔍 Search a specific stock", expanded=False):
+        sc_search = st.text_input(
+            "Type stock name",
+            placeholder="e.g. Adani Ports, TCS, HDFC...",
+            key="scanner_search_box"
+        )
+        if sc_search:
+            hits = {k:v for k,v in STOCKS.items()
+                    if sc_search.strip().lower() in k.lower()}
+            if hits:
+                picked = st.selectbox(
+                    "Select stock",
+                    list(hits.keys()),
+                    key="scanner_search_pick",
+                    label_visibility="collapsed"
+                )
+                sc1, sc2 = st.columns(2)
+                with sc1:
+                    if st.button(
+                        f"📊 Analyse {picked}",
+                        key="scanner_search_analyse",
+                        type="primary",
+                        use_container_width=True
+                    ):
+                        st.session_state["sn"] = picked
+                        st.session_state["st"] = hits[picked]
+                        st.rerun()
+                with sc2:
+                    if tg_configured() and st.button(
+                        "📱 Quick Signal",
+                        key="scanner_search_tg",
+                        use_container_width=True
+                    ):
+                        sym_q = hits[picked]
+                        lp_q  = live_price(sym_q)
+                        if lp_q["ok"]:
+                            msg_q = (
+                                f"<b>Quick Signal: {picked}</b>\n"
+                                f"Price: Rs {lp_q['p']:,.2f}\n"
+                                f"Change: {lp_q['chg']:+.2f}%\n"
+                                f"Check Trade Setup tab for full analysis."
+                            )
+                            if send_telegram(
+                                st.session_state["tg_token_saved"],
+                                st.session_state["tg_chat_saved"],
+                                msg_q
+                            ):
+                                st.success("Sent ✅")
+                            else:
+                                st.error("Failed ❌")
+            elif sc_search:
+                st.caption("No results found")
+
     st.caption(
         "Scans stocks simultaneously across sectors. "
         "Click Scan, review results, then manually send signals to Telegram."
@@ -2802,6 +2857,8 @@ with T3:
         ],
         **SECTORS
     }
+
+    st.markdown("---")
 
     # ── Telegram setup ────────────────────────────────────
     # Show configured badge if already set
@@ -2926,7 +2983,6 @@ with T3:
                     )
                     st.balloons()
                 else:
-                    # Try to get specific error
                     try:
                         resp = requests.post(
                             f"https://api.telegram.org/bot{tok}"
@@ -2938,17 +2994,12 @@ with T3:
                         err = resp.json().get(
                             "description", resp.text
                         )
-                    except Exception as e:
-                        err = str(e)
+                    except Exception as ex:
+                        err = str(ex)
                     st.error(
-                        f"❌ Failed: {err}\n\n"
-                        "**Common fixes:**\n"
-                        "1. Open Telegram → find your bot "
-                        "→ press START\n"
-                        "2. Chat ID must be a plain number "
-                        "from @userinfobot\n"
-                        "3. Token format: "
-                        "`1234567890:AAHxxxxxxxx`"
+                        f"❌ Failed: {err}  \n"
+                        "Fix: Open Telegram → find your bot "
+                        "→ press START first."
                     )
 
         # Show current status
@@ -3269,481 +3320,422 @@ with T3:
         prog.empty()
         return results, alerted
     # ── Display results ────────────────────────────────────
+    # ── Show previous scan results if available ───────
+    # This keeps results visible when buttons are clicked
+    if "scan_results" in st.session_state and not run_scanner:
+        results   = st.session_state["scan_results"]
+        scan_time = st.session_state.get("scan_time","")
+        grp_used  = st.session_state.get("scan_group_used","")
+        tf_used   = st.session_state.get("scan_tf_used","")
+        st.info(
+            f"📊 Showing last scan results — "
+            f"{len(results)} signals | "
+            f"{grp_used} | {tf_used} | {scan_time}  "
+            f"*(Click Scan to refresh)*"
+        )
+        # Display cached results
+        total_scanned = len(SCANNER_UNIVERSE.get(grp_used,[]))
+
+        # ── Summary metrics ───────────────────────────────
+        results_sorted = sorted(
+            results, key=lambda x: x["Score"], reverse=True
+        )
+        strong_r = [r for r in results_sorted if r["Score"] >= 8]
+        good_r   = [r for r in results_sorted if 6 <= r["Score"] < 8]
+        ce_list  = [r for r in results_sorted if r["Direction"]=="UPTREND"]
+        pe_list  = [r for r in results_sorted if r["Direction"]=="DOWNTREND"]
+
+        sm1,sm2,sm3,sm4,sm5 = st.columns(5)
+        sm1.metric("Scanned",   total_scanned if total_scanned else len(results))
+        sm2.metric("Signals",   len(results))
+        sm3.metric("Strong 8+", len(strong_r))
+        sm4.metric("BUY CE",    len(ce_list))
+        sm5.metric("BUY PE",    len(pe_list))
+
+        # ── Strong signals ─────────────────────────────────
+        if strong_r:
+            st.markdown("---")
+            sh1, sh2 = st.columns([3,1])
+            with sh1:
+                st.markdown(f"### 🔥 STRONG SIGNALS — {len(strong_r)} found")
+                st.caption("Confirmed by technical score AND historical consistency.")
+            with sh2:
+                if tg_configured():
+                    if st.button("📱 Send All", key="scan_tg_all",
+                                 type="primary", use_container_width=True):
+                        tok = st.session_state.get("tg_token_saved","")
+                        cid = st.session_state.get("tg_chat_saved","")
+                        sent = 0
+                        for r_s in strong_r:
+                            msg_s = (
+                                f"<b>{r_s['Stock']}</b> — {r_s['Action']}\n"
+                                f"Score: {r_s['Score']}/10 | Combined: {r_s['Combined']}/10\n"
+                                f"Price: Rs {r_s['Price']:,.2f}\n"
+                                f"Entry: Rs {r_s['Entry']:,.2f} | SL: Rs {r_s['SL']:,.2f}\n"
+                                f"T1: Rs {r_s['T1']:,.2f} | T2: Rs {r_s['T2']:,.2f}\n"
+                                f"ATM: {r_s['ATM']} | RSI: {r_s['RSI']:.0f} | R:R {r_s['RR']}:1"
+                            )
+                            if send_telegram(tok, cid, msg_s):
+                                sent += 1
+                        if sent > 0:
+                            st.success(f"✅ Sent {sent}/{len(strong_r)} signals!")
+                        else:
+                            st.error("❌ Failed. Check Telegram setup.")
+
+            for idx_r, r in enumerate(strong_r):
+                dir_col  = "#16a34a" if r["Direction"]=="UPTREND" else "#dc2626"
+                bg_light = "#f0fdf4" if r["Direction"]=="UPTREND" else "#fef2f2"
+                chg_col  = "#16a34a" if r["Change%"] >= 0 else "#dc2626"
+                arr      = "▲" if r["Change%"] >= 0 else "▼"
+                border_col = "#86efac" if r["Direction"]=="UPTREND" else "#fca5a5"
+
+                st.markdown(
+                    f"<div style='background:#ffffff;border:1.5px solid {border_col};"
+                    f"border-radius:12px;padding:16px 18px;margin-bottom:10px'>"
+                    f"<div style='display:flex;justify-content:space-between;"
+                    f"align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px'>"
+                    f"<span style='font-size:17px;font-weight:700;color:#1e293b'>{r['Stock']}</span>"
+                    f"<span style='background:{bg_light};color:{dir_col};padding:4px 14px;"
+                    f"border-radius:20px;font-size:13px;font-weight:700'>{r['Action']}</span>"
+                    f"<span style='font-size:12px;color:#64748b'>{r['Reliability']}</span>"
+                    f"</div>"
+                    f"<div style='display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px'>"
+                    f"<div><div style='font-size:10px;color:#94a3b8'>Signal</div>"
+                    f"<div style='font-size:20px;font-weight:700;color:{dir_col}'>{r['Score']}/10</div></div>"
+                    f"<div><div style='font-size:10px;color:#94a3b8'>Combined</div>"
+                    f"<div style='font-size:20px;font-weight:700;color:#1e293b'>{r['Combined']}/10</div></div>"
+                    f"<div><div style='font-size:10px;color:#94a3b8'>R:R</div>"
+                    f"<div style='font-size:14px;font-weight:600;color:#374151'>{r['RR']}:1</div></div>"
+                    f"<div><div style='font-size:10px;color:#94a3b8'>Price</div>"
+                    f"<div style='font-size:14px;font-weight:600;color:#1e293b'>"
+                    f"₹{r['Price']:,.2f} <span style='color:{chg_col}'>{arr}{abs(r['Change%']):.1f}%</span></div></div>"
+                    f"</div>"
+                    f"<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px'>"
+                    f"<div style='background:#f0fdf4;border-radius:6px;padding:8px;text-align:center'>"
+                    f"<div style='font-size:10px;color:#64748b'>Entry</div>"
+                    f"<div style='font-size:13px;font-weight:700;color:#16a34a'>₹{r['Entry']:,.0f}</div></div>"
+                    f"<div style='background:#fef2f2;border-radius:6px;padding:8px;text-align:center'>"
+                    f"<div style='font-size:10px;color:#64748b'>Stop Loss</div>"
+                    f"<div style='font-size:13px;font-weight:700;color:#dc2626'>₹{r['SL']:,.0f}</div></div>"
+                    f"<div style='background:#eff6ff;border-radius:6px;padding:8px;text-align:center'>"
+                    f"<div style='font-size:10px;color:#64748b'>Target 1</div>"
+                    f"<div style='font-size:13px;font-weight:700;color:#1d4ed8'>₹{r['T1']:,.0f}</div></div>"
+                    f"<div style='background:#eff6ff;border-radius:6px;padding:8px;text-align:center'>"
+                    f"<div style='font-size:10px;color:#64748b'>Target 2</div>"
+                    f"<div style='font-size:13px;font-weight:700;color:#1d4ed8'>₹{r['T2']:,.0f}</div></div>"
+                    f"</div>"
+                    f"<div style='background:#faf5ff;border-radius:6px;padding:8px 12px;margin-bottom:8px;"
+                    f"font-size:12px;color:#7c3aed'>"
+                    f"<b>{r['OptType']}</b> | ATM ✅ {r['ATM']} | ITM {r['ITM']} | OTM {r['OTM']}"
+                    f"{'  ✨ Virgin CPR' if r.get('Virgin_CPR') else ''}"
+                    f" | CPR: Price {r.get('CPR_Pos','—')}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+                bc1, bc2 = st.columns(2)
+                with bc1:
+                    if st.button(f"📊 Analyse", key=f"scan_an_{idx_r}",
+                                 type="primary", use_container_width=True):
+                        st.session_state["sn"] = r["Stock"]
+                        st.session_state["st"] = r["Sym"]
+                        st.rerun()
+                with bc2:
+                    if tg_configured():
+                        if st.button(f"📱 Send Signal", key=f"scan_tg_{idx_r}",
+                                     use_container_width=True):
+                            tok = st.session_state.get("tg_token_saved","")
+                            cid = st.session_state.get("tg_chat_saved","")
+                            msg = (
+                                f"<b>{r['Stock']}</b> — {r['Action']}\n"
+                                f"Score: {r['Score']}/10 | Combined: {r['Combined']}/10\n"
+                                f"Reliability: {r['Reliability']}\n"
+                                f"Price: Rs {r['Price']:,.2f}\n"
+                                f"Entry: Rs {r['Entry']:,.2f} | SL: Rs {r['SL']:,.2f}\n"
+                                f"T1: Rs {r['T1']:,.2f} | T2: Rs {r['T2']:,.2f}\n"
+                                f"ATM: {r['ATM']} | ITM: {r['ITM']} | OTM: {r['OTM']}\n"
+                                f"RSI: {r['RSI']:.0f} | R:R {r['RR']}:1"
+                            )
+                            if send_telegram(tok, cid, msg):
+                                st.success(f"✅ {r['Stock']} sent!")
+                            else:
+                                st.error("❌ Failed — check Telegram setup")
+                st.markdown("<div style='margin:4px 0'></div>", unsafe_allow_html=True)
+
+        # ── Good signals ───────────────────────────────────
+        if good_r:
+            st.markdown("---")
+            st.markdown(f"### 📈 GOOD SIGNALS — {len(good_r)} found")
+            st.caption("Watch these — enter when score reaches 8+")
+            for gi in range(0, len(good_r), 2):
+                chunk = good_r[gi:gi+2]
+                gcols = st.columns(2)
+                for ci, r in enumerate(chunk):
+                    dc = "#16a34a" if r["Direction"]=="UPTREND" else "#dc2626"
+                    with gcols[ci]:
+                        st.markdown(
+                            f"<div style='background:#ffffff;border:1px solid #e2e8f0;"
+                            f"border-radius:10px;padding:14px;margin-bottom:6px'>"
+                            f"<div style='display:flex;justify-content:space-between'>"
+                            f"<b style='color:#1e293b;font-size:15px'>{r['Stock']}</b>"
+                            f"<span style='color:{dc};font-weight:700'>{r['Score']}/10</span></div>"
+                            f"<div style='font-size:12px;color:#64748b;margin-top:6px'>"
+                            f"{r['Action']} | ₹{r['Price']:,.0f} | RSI {r['RSI']:.0f}</div>"
+                            f"<div style='font-size:11px;color:#94a3b8;margin-top:4px'>"
+                            f"Entry ₹{r['Entry']:,.0f} | SL ₹{r['SL']:,.0f}</div>"
+                            f"<div style='font-size:11px;color:#7c3aed;margin-top:4px'>"
+                            f"{r['OptType']} ATM {r['ATM']}</div></div>",
+                            unsafe_allow_html=True
+                        )
+                        if st.button("View", key=f"scan_vw_{gi}_{ci}",
+                                     use_container_width=True):
+                            st.session_state["sn"] = r["Stock"]
+                            st.session_state["st"] = r["Sym"]
+                            st.rerun()
+
+        # ── Score chart ────────────────────────────────────
+        if results_sorted:
+            st.markdown("---")
+            import plotly.graph_objects as go_scan
+            fig_scan = go_scan.Figure(go_scan.Bar(
+                x=[r["Stock"] for r in results_sorted],
+                y=[r["Combined"] for r in results_sorted],
+                marker_color=["#16a34a" if r["Direction"]=="UPTREND"
+                              else "#dc2626" for r in results_sorted],
+                text=[f"{r['Combined']}/10" for r in results_sorted],
+                textposition="outside",
+            ))
+            fig_scan.add_hline(y=8, line_dash="dash", line_color="#16a34a",
+                               annotation_text="Strong (8+)")
+            fig_scan.add_hline(y=6, line_dash="dot", line_color="#f59e0b",
+                               annotation_text="Good (6+)")
+            fig_scan.update_layout(
+                template="plotly_white", height=300,
+                yaxis_range=[0,11],
+                margin=dict(l=10,r=10,t=20,b=60),
+                xaxis_tickangle=-35, showlegend=False,
+                title="Combined Score (60% Technical + 40% Historical)"
+            )
+            st.plotly_chart(fig_scan, use_container_width=True)
+
     if run_scanner or auto_scan:
         if auto_scan and not run_scanner:
             st.info("Auto scan active — running every 5 minutes")
 
         stocks_to_scan = SCANNER_UNIVERSE[scan_group]
         st.markdown(f"**Scanning {len(stocks_to_scan)} stocks "
-                    f"on {scan_tf} timeframe...**")
+                f"on {scan_tf} timeframe...**")
 
-        with st.spinner(""):
+        with st.spinner("Scanning... please wait"):
             results, alerted = run_scan_engine(
-                stocks_to_scan, scan_tf,
-                min_score_scan, alert_score
-            )
+            stocks_to_scan, scan_tf,
+            min_score_scan, alert_score
+        )
         # Filter by combined score
-        if "min_combined_scan" in st.session_state:
-            results = [
-                r for r in results
-                if r.get("Combined", 0) >=
-                st.session_state["min_combined_scan"]
-            ]
+        min_comb = st.session_state.get("min_combined_scan", 5)
+        results = [
+        r for r in results
+        if r.get("Combined", 0) >= min_comb
+        ]
+
+        # ── Save results to session state ──────────────
+        # This ensures results persist when buttons are clicked
+        if results:
+            st.session_state["scan_results"]     = results
+            st.session_state["scan_group_used"]  = scan_group
+            st.session_state["scan_tf_used"]     = scan_tf
+            st.session_state["scan_time"]        = (
+                now_ist().strftime("%H:%M:%S IST")
+            )
 
         if not results:
             st.warning(
-                "No stocks met the minimum score. "
-                "Try lowering the min score or use 1d timeframe."
-            )
+            "No stocks met the minimum score. "
+            "Try lowering the min score or use 1d timeframe."
+        )
         else:
-            # Sort by score
-            results.sort(key=lambda x: x["Score"], reverse=True)
+            total_scanned = len(stocks_to_scan)
 
-            # Summary metrics
-            strong   = [r for r in results if r["Score"] >= 8]
-            good     = [r for r in results if 6 <= r["Score"] < 8]
-            watch    = [r for r in results if r["Score"] < 6]
-            ce_list  = [r for r in results if r["Direction"]=="UPTREND"]
-            pe_list  = [r for r in results if r["Direction"]=="DOWNTREND"]
+            # ── Summary metrics ───────────────────────────────
+            results_sorted = sorted(
+                results, key=lambda x: x["Score"], reverse=True
+            )
+            strong_r = [r for r in results_sorted if r["Score"] >= 8]
+            good_r   = [r for r in results_sorted if 6 <= r["Score"] < 8]
+            ce_list  = [r for r in results_sorted if r["Direction"]=="UPTREND"]
+            pe_list  = [r for r in results_sorted if r["Direction"]=="DOWNTREND"]
 
             sm1,sm2,sm3,sm4,sm5 = st.columns(5)
-            sm1.metric("Scanned",    len(stocks_to_scan))
-            sm2.metric("Signals",    len(results))
-            sm3.metric("Strong 8+",  len(strong))
-            sm4.metric("BUY CE",     len(ce_list))
-            sm5.metric("BUY PE",     len(pe_list))
+            sm1.metric("Scanned",   total_scanned if total_scanned else len(results))
+            sm2.metric("Signals",   len(results))
+            sm3.metric("Strong 8+", len(strong_r))
+            sm4.metric("BUY CE",    len(ce_list))
+            sm5.metric("BUY PE",    len(pe_list))
 
-
-
-            st.markdown(f"*Scanned at "
-                        f"{now_ist().strftime('%H:%M:%S IST')} | "
-                        f"Timeframe: {scan_tf}*")
-
-            # ── Sort by combined score ─────────────────────
-            results.sort(
-                key=lambda x: x["Combined"], reverse=True
-            )
-
-            # ── Strong signals (score 8+) ──────────────────
-            strong_r = [r for r in results
-                        if r["Score"] >= 8]
-            good_r   = [r for r in results
-                        if 6 <= r["Score"] < 8]
-
+            # ── Strong signals ─────────────────────────────────
             if strong_r:
                 st.markdown("---")
-                sh1, sh2 = st.columns([3, 1])
+                sh1, sh2 = st.columns([3,1])
                 with sh1:
-                    st.markdown(
-                        f"### 🔥 STRONG SIGNALS — "
-                        f"{len(strong_r)} found"
-                    )
-                    st.caption(
-                        "Confirmed by both technical score AND "
-                        "historical consistency. Highest priority."
-                    )
+                    st.markdown(f"### 🔥 STRONG SIGNALS — {len(strong_r)} found")
+                    st.caption("Confirmed by technical score AND historical consistency.")
                 with sh2:
                     if tg_configured():
-                        if st.button(
-                            "📱 Send All to Telegram",
-                            key="scan_tg_all",
-                            type="primary",
-                            use_container_width=True
-                        ):
-                            tok = st.session_state.get(
-                                "tg_token_saved", ""
-                            )
-                            cid = st.session_state.get(
-                                "tg_chat_saved", ""
-                            )
-                            sent_count = 0
-                            for r_all in strong_r:
-                                msg_all = (
-                                    f"<b>{r_all['Stock']}</b>"
-                                    f" — {r_all['Action']}\n"
-                                    f"Score: {r_all['Score']}/10"
-                                    f" | Combined: "
-                                    f"{r_all['Combined']}/10\n"
-                                    f"Price: Rs "
-                                    f"{r_all['Price']:,.2f}\n"
-                                    f"Entry: Rs "
-                                    f"{r_all['Entry']:,.2f} | "
-                                    f"SL: Rs {r_all['SL']:,.2f}\n"
-                                    f"T1: Rs {r_all['T1']:,.2f}"
-                                    f" | T2: Rs "
-                                    f"{r_all['T2']:,.2f}\n"
-                                    f"ATM: {r_all['ATM']}"
+                        if st.button("📱 Send All", key="scan_tg_all",
+                                     type="primary", use_container_width=True):
+                            tok = st.session_state.get("tg_token_saved","")
+                            cid = st.session_state.get("tg_chat_saved","")
+                            sent = 0
+                            for r_s in strong_r:
+                                msg_s = (
+                                    f"<b>{r_s['Stock']}</b> — {r_s['Action']}\n"
+                                    f"Score: {r_s['Score']}/10 | Combined: {r_s['Combined']}/10\n"
+                                    f"Price: Rs {r_s['Price']:,.2f}\n"
+                                    f"Entry: Rs {r_s['Entry']:,.2f} | SL: Rs {r_s['SL']:,.2f}\n"
+                                    f"T1: Rs {r_s['T1']:,.2f} | T2: Rs {r_s['T2']:,.2f}\n"
+                                    f"ATM: {r_s['ATM']} | RSI: {r_s['RSI']:.0f} | R:R {r_s['RR']}:1"
                                 )
-                                if send_telegram(tok, cid,
-                                                 msg_all):
-                                    sent_count += 1
-                            st.success(
-                                f"✅ Sent {sent_count}/"
-                                f"{len(strong_r)} signals!"
-                            )
-                    else:
-                        st.caption(
-                            "Setup Telegram above to enable"
-                        )
+                                if send_telegram(tok, cid, msg_s):
+                                    sent += 1
+                            if sent > 0:
+                                st.success(f"✅ Sent {sent}/{len(strong_r)} signals!")
+                            else:
+                                st.error("❌ Failed. Check Telegram setup.")
 
-                for r in strong_r:
-                    dir_col  = ("#16a34a"
-                                if r["Direction"]=="UPTREND"
-                                else "#dc2626")
-                    bg_light = ("#f0fdf4"
-                                if r["Direction"]=="UPTREND"
-                                else "#fef2f2")
-                    chg_col  = ("#16a34a"
-                                if r["Change%"] >= 0
-                                else "#dc2626")
-                    arr      = "▲" if r["Change%"]>=0 else "▼"
+                for idx_r, r in enumerate(strong_r):
+                    dir_col  = "#16a34a" if r["Direction"]=="UPTREND" else "#dc2626"
+                    bg_light = "#f0fdf4" if r["Direction"]=="UPTREND" else "#fef2f2"
+                    chg_col  = "#16a34a" if r["Change%"] >= 0 else "#dc2626"
+                    arr      = "▲" if r["Change%"] >= 0 else "▼"
+                    border_col = "#86efac" if r["Direction"]=="UPTREND" else "#fca5a5"
 
-                    # Main card
                     st.markdown(
-                        f"<div style='background:#ffffff;"
-                        f"border:1.5px solid "
-                        f"{'#86efac' if r['Direction']=='UPTREND' else '#fca5a5'};"
-                        f"border-radius:12px;padding:16px 20px;"
-                        f"margin-bottom:8px;"
-                        f"box-shadow:0 2px 8px rgba(0,0,0,0.06)'>"
-
-                        # Row 1: Name + Action + Reliability
-                        f"<div style='display:flex;"
-                        f"justify-content:space-between;"
-                        f"align-items:center;flex-wrap:wrap;gap:6px'>"
-                        f"<span style='font-size:18px;font-weight:700;"
-                        f"color:#1e293b'>{r['Stock']}</span>"
-                        f"<span style='background:{bg_light};"
-                        f"color:{dir_col};padding:4px 14px;"
-                        f"border-radius:20px;font-size:13px;"
-                        f"font-weight:700'>{r['Action']}</span>"
-                        f"<span style='font-size:12px;"
-                        f"color:#64748b'>{r['Reliability']}</span>"
+                        f"<div style='background:#ffffff;border:1.5px solid {border_col};"
+                        f"border-radius:12px;padding:16px 18px;margin-bottom:10px'>"
+                        f"<div style='display:flex;justify-content:space-between;"
+                        f"align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px'>"
+                        f"<span style='font-size:17px;font-weight:700;color:#1e293b'>{r['Stock']}</span>"
+                        f"<span style='background:{bg_light};color:{dir_col};padding:4px 14px;"
+                        f"border-radius:20px;font-size:13px;font-weight:700'>{r['Action']}</span>"
+                        f"<span style='font-size:12px;color:#64748b'>{r['Reliability']}</span>"
                         f"</div>"
-
-                        # Row 2: Scores
-                        f"<div style='margin:10px 0 8px;"
-                        f"display:flex;gap:20px;flex-wrap:wrap'>"
-                        f"<div><div style='font-size:10px;color:#94a3b8;"
-                        f"text-transform:uppercase;letter-spacing:0.5px'>"
-                        f"Signal Score</div>"
-                        f"<div style='font-size:22px;font-weight:700;"
-                        f"color:{dir_col}'>{r['Score']}/10</div></div>"
-                        f"<div><div style='font-size:10px;color:#94a3b8;"
-                        f"text-transform:uppercase;letter-spacing:0.5px'>"
-                        f"Combined Score</div>"
-                        f"<div style='font-size:22px;font-weight:700;"
-                        f"color:#1e293b'>{r['Combined']}/10</div></div>"
-                        f"<div><div style='font-size:10px;color:#94a3b8;"
-                        f"text-transform:uppercase;letter-spacing:0.5px'>"
-                        f"Consistency</div>"
-                        f"<div style='font-size:14px;font-weight:600;"
-                        f"color:#374151'>{r['Consist3']}/3 candles</div></div>"
-                        f"<div><div style='font-size:10px;color:#94a3b8;"
-                        f"text-transform:uppercase;letter-spacing:0.5px'>"
-                        f"R:R Ratio</div>"
-                        f"<div style='font-size:14px;font-weight:600;"
-                        f"color:#374151'>{r['RR']}:1</div></div>"
+                        f"<div style='display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px'>"
+                        f"<div><div style='font-size:10px;color:#94a3b8'>Signal</div>"
+                        f"<div style='font-size:20px;font-weight:700;color:{dir_col}'>{r['Score']}/10</div></div>"
+                        f"<div><div style='font-size:10px;color:#94a3b8'>Combined</div>"
+                        f"<div style='font-size:20px;font-weight:700;color:#1e293b'>{r['Combined']}/10</div></div>"
+                        f"<div><div style='font-size:10px;color:#94a3b8'>R:R</div>"
+                        f"<div style='font-size:14px;font-weight:600;color:#374151'>{r['RR']}:1</div></div>"
+                        f"<div><div style='font-size:10px;color:#94a3b8'>Price</div>"
+                        f"<div style='font-size:14px;font-weight:600;color:#1e293b'>"
+                        f"₹{r['Price']:,.2f} <span style='color:{chg_col}'>{arr}{abs(r['Change%']):.1f}%</span></div></div>"
                         f"</div>"
-
-                        # Row 3: Price info
-                        f"<div style='background:#f8fafc;"
-                        f"border-radius:8px;padding:10px 14px;"
-                        f"margin-bottom:10px;font-size:13px;"
-                        f"color:#475569'>"
-                        f"Price <b style='color:#1e293b'>"
-                        f"₹{r['Price']:,.2f}</b>"
-                        f"  <span style='color:{chg_col}'>"
-                        f"{arr}{abs(r['Change%']):.2f}%</span>"
-                        f"  &nbsp;|&nbsp;  RSI "
-                        f"<b style='color:#1e293b'>{r['RSI']:.0f}</b>"
-                        f"  &nbsp;|&nbsp;  ADX "
-                        f"<b style='color:#1e293b'>{r['ADX']:.0f}</b>"
-                        f"  &nbsp;|&nbsp;  Vol "
-                        f"{'✅' if r['VolSurge'] else '❌'}"
+                        f"<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px'>"
+                        f"<div style='background:#f0fdf4;border-radius:6px;padding:8px;text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b'>Entry</div>"
+                        f"<div style='font-size:13px;font-weight:700;color:#16a34a'>₹{r['Entry']:,.0f}</div></div>"
+                        f"<div style='background:#fef2f2;border-radius:6px;padding:8px;text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b'>Stop Loss</div>"
+                        f"<div style='font-size:13px;font-weight:700;color:#dc2626'>₹{r['SL']:,.0f}</div></div>"
+                        f"<div style='background:#eff6ff;border-radius:6px;padding:8px;text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b'>Target 1</div>"
+                        f"<div style='font-size:13px;font-weight:700;color:#1d4ed8'>₹{r['T1']:,.0f}</div></div>"
+                        f"<div style='background:#eff6ff;border-radius:6px;padding:8px;text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b'>Target 2</div>"
+                        f"<div style='font-size:13px;font-weight:700;color:#1d4ed8'>₹{r['T2']:,.0f}</div></div>"
                         f"</div>"
-
-                        # Row 4: Entry SL Targets
-                        f"<div style='display:grid;"
-                        f"grid-template-columns:repeat(5,1fr);"
-                        f"gap:8px;margin-bottom:10px'>"
-
-                        f"<div style='background:#f0fdf4;"
-                        f"border-radius:8px;padding:8px;text-align:center'>"
-                        f"<div style='font-size:10px;color:#64748b;"
-                        f"text-transform:uppercase'>Entry</div>"
-                        f"<div style='font-size:13px;font-weight:700;"
-                        f"color:#16a34a'>₹{r['Entry']:,.2f}</div>"
-                        f"<div style='font-size:10px;color:#94a3b8'>"
-                        f"EMA9 pullback</div></div>"
-
-                        f"<div style='background:#fef2f2;"
-                        f"border-radius:8px;padding:8px;text-align:center'>"
-                        f"<div style='font-size:10px;color:#64748b;"
-                        f"text-transform:uppercase'>Stop Loss</div>"
-                        f"<div style='font-size:13px;font-weight:700;"
-                        f"color:#dc2626'>₹{r['SL']:,.2f}</div>"
-                        f"<div style='font-size:10px;color:#94a3b8'>"
-                        f"ATR-based</div></div>"
-
-                        f"<div style='background:#eff6ff;"
-                        f"border-radius:8px;padding:8px;text-align:center'>"
-                        f"<div style='font-size:10px;color:#64748b;"
-                        f"text-transform:uppercase'>Target 1</div>"
-                        f"<div style='font-size:13px;font-weight:700;"
-                        f"color:#1d4ed8'>₹{r['T1']:,.2f}</div>"
-                        f"<div style='font-size:10px;color:#94a3b8'>"
-                        f"1.5× ATR</div></div>"
-
-                        f"<div style='background:#eff6ff;"
-                        f"border-radius:8px;padding:8px;text-align:center'>"
-                        f"<div style='font-size:10px;color:#64748b;"
-                        f"text-transform:uppercase'>Target 2</div>"
-                        f"<div style='font-size:13px;font-weight:700;"
-                        f"color:#1d4ed8'>₹{r['T2']:,.2f}</div>"
-                        f"<div style='font-size:10px;color:#94a3b8'>"
-                        f"2.5× ATR</div></div>"
-
-                        f"<div style='background:#eff6ff;"
-                        f"border-radius:8px;padding:8px;text-align:center'>"
-                        f"<div style='font-size:10px;color:#64748b;"
-                        f"text-transform:uppercase'>Target 3</div>"
-                        f"<div style='font-size:13px;font-weight:700;"
-                        f"color:#1d4ed8'>₹{r['T3']:,.2f}</div>"
-                        f"<div style='font-size:10px;color:#94a3b8'>"
-                        f"4× ATR</div></div>"
-
-                        f"</div>"
-
-                        # Row 4b: CPR info
-                        f"<div style='background:"
-                        f"{'#f0fdf4' if r.get('CPR_Pos')=='ABOVE' else '#fef2f2' if r.get('CPR_Pos')=='BELOW' else '#fffbeb'};"
-                        f"border-radius:8px;padding:8px 14px;"
-                        f"margin-bottom:8px;font-size:13px'>"
-                        f"<b style='color:#7c3aed'>CPR</b> — "
-                        f"Price is <b>{r.get('CPR_Pos','—')}</b> "
-                        f"Central Pivot Range | "
-                        f"Bias: <b>{r.get('CPR_Bias','—')}</b> | "
-                        f"{r.get('CPR_Type','—')[:20]}"
-                        f"{'  ✨ <b>Virgin CPR</b>' if r.get('Virgin_CPR') else ''}"
-                        f"</div>"
-
-                        # Row 5: Options ATM/ITM/OTM
-                        f"<div style='background:#faf5ff;"
-                        f"border-radius:8px;padding:10px 14px;"
-                        f"margin-bottom:10px'>"
-                        f"<div style='font-size:11px;color:#7c3aed;"
-                        f"font-weight:700;margin-bottom:6px'>"
-                        f"OPTIONS — {r['OptType']}</div>"
-                        f"<div style='display:flex;gap:16px;"
-                        f"flex-wrap:wrap;font-size:13px'>"
-                        f"<span><b style='color:#16a34a'>✅ ATM {r['ATM']}</b>"
-                        f" (Recommended)</span>"
-                        f"<span style='color:#475569'>ITM {r['ITM']}"
-                        f" (safer, costly)</span>"
-                        f"<span style='color:#94a3b8'>OTM {r['OTM']}"
-                        f" (risky, cheap)</span>"
-                        f"</div></div>"
-
+                        f"<div style='background:#faf5ff;border-radius:6px;padding:8px 12px;margin-bottom:8px;"
+                        f"font-size:12px;color:#7c3aed'>"
+                        f"<b>{r['OptType']}</b> | ATM ✅ {r['ATM']} | ITM {r['ITM']} | OTM {r['OTM']}"
+                        f"{'  ✨ Virgin CPR' if r.get('Virgin_CPR') else ''}"
+                        f" | CPR: Price {r.get('CPR_Pos','—')}</div>"
                         f"</div>",
                         unsafe_allow_html=True
                     )
-
-                    # Action buttons below card
-                    btn_c1, btn_c2 = st.columns(2)
-
-                    with btn_c1:
-                        if st.button(
-                            f"📊 Analyse {r['Stock']}",
-                            key=f"scan_an_{r['Stock']}",
-                            type="primary",
-                            use_container_width=True
-                        ):
+                    bc1, bc2 = st.columns(2)
+                    with bc1:
+                        if st.button(f"📊 Analyse", key=f"scan_an_{idx_r}",
+                                     type="primary", use_container_width=True):
                             st.session_state["sn"] = r["Stock"]
                             st.session_state["st"] = r["Sym"]
                             st.rerun()
-
-                    with btn_c2:
-                        if st.button(
-                            f"📱 Send to Telegram",
-                            key=f"scan_tg_{r['Stock']}",
-                            use_container_width=True,
-                            disabled=not tg_configured()
-                        ):
-                            tok = st.session_state.get(
-                                "tg_token_saved", ""
-                            )
-                            cid = st.session_state.get(
-                                "tg_chat_saved", ""
-                            )
-                            msg = (
-                                f"<b>{r['Stock']}</b> — "
-                                f"{r['Action']}\n"
-                                f"Score: {r['Score']}/10 | "
-                                f"Combined: {r['Combined']}/10\n"
-                                f"Reliability: {r['Reliability']}\n"
-                                f"Price: Rs {r['Price']:,.2f}\n"
-                                f"Entry: Rs {r['Entry']:,.2f}\n"
-                                f"SL: Rs {r['SL']:,.2f}\n"
-                                f"T1: Rs {r['T1']:,.2f} | "
-                                f"T2: Rs {r['T2']:,.2f}\n"
-                                f"ATM: {r['ATM']} | "
-                                f"ITM: {r['ITM']} | "
-                                f"OTM: {r['OTM']}\n"
-                                f"RSI: {r['RSI']:.0f} | "
-                                f"R:R {r['RR']}:1"
-                            )
-                            if send_telegram(tok, cid, msg):
-                                st.success(
-                                    f"✅ Sent {r['Stock']} "
-                                    f"signal to Telegram!"
+                    with bc2:
+                        if tg_configured():
+                            if st.button(f"📱 Send Signal", key=f"scan_tg_{idx_r}",
+                                         use_container_width=True):
+                                tok = st.session_state.get("tg_token_saved","")
+                                cid = st.session_state.get("tg_chat_saved","")
+                                msg = (
+                                    f"<b>{r['Stock']}</b> — {r['Action']}\n"
+                                    f"Score: {r['Score']}/10 | Combined: {r['Combined']}/10\n"
+                                    f"Reliability: {r['Reliability']}\n"
+                                    f"Price: Rs {r['Price']:,.2f}\n"
+                                    f"Entry: Rs {r['Entry']:,.2f} | SL: Rs {r['SL']:,.2f}\n"
+                                    f"T1: Rs {r['T1']:,.2f} | T2: Rs {r['T2']:,.2f}\n"
+                                    f"ATM: {r['ATM']} | ITM: {r['ITM']} | OTM: {r['OTM']}\n"
+                                    f"RSI: {r['RSI']:.0f} | R:R {r['RR']}:1"
                                 )
-                            else:
-                                st.error(
-                                    "❌ Failed. Check Telegram "
-                                    "setup in scanner tab."
-                                )
+                                if send_telegram(tok, cid, msg):
+                                    st.success(f"✅ {r['Stock']} sent!")
+                                else:
+                                    st.error("❌ Failed — check Telegram setup")
+                    st.markdown("<div style='margin:4px 0'></div>", unsafe_allow_html=True)
 
-                    if not tg_configured():
-                        st.caption(
-                            "⚠️ Setup Telegram in the "
-                            "section above to enable alerts"
-                        )
-
-                    st.markdown(
-                        "<div style='margin:8px 0'></div>",
-                        unsafe_allow_html=True
-                    )
-
-            # ── Good signals (6-7) ─────────────────────────
+            # ── Good signals ───────────────────────────────────
             if good_r:
                 st.markdown("---")
-                st.markdown(
-                    f"### 📈 GOOD SIGNALS — {len(good_r)} found"
-                )
-                st.caption(
-                    "Forming but not yet confirmed. "
-                    "Watch these — enter when score reaches 8."
-                )
-                cols_g = 2
-                for gi in range(0, len(good_r), cols_g):
-                    chunk_g = good_r[gi:gi+cols_g]
-                    gcols   = st.columns(cols_g)
-                    for ci, r in enumerate(chunk_g):
-                        dc = ("#16a34a"
-                              if r["Direction"]=="UPTREND"
-                              else "#dc2626")
+                st.markdown(f"### 📈 GOOD SIGNALS — {len(good_r)} found")
+                st.caption("Watch these — enter when score reaches 8+")
+                for gi in range(0, len(good_r), 2):
+                    chunk = good_r[gi:gi+2]
+                    gcols = st.columns(2)
+                    for ci, r in enumerate(chunk):
+                        dc = "#16a34a" if r["Direction"]=="UPTREND" else "#dc2626"
                         with gcols[ci]:
                             st.markdown(
-                                f"<div style='background:#ffffff;"
-                                f"border:1px solid #e2e8f0;"
-                                f"border-radius:10px;"
-                                f"padding:14px;margin-bottom:6px'>"
-                                f"<div style='display:flex;"
-                                f"justify-content:space-between;"
-                                f"align-items:center'>"
-                                f"<b style='color:#1e293b;font-size:15px'>"
-                                f"{r['Stock']}</b>"
-                                f"<span style='color:{dc};"
-                                f"font-weight:700;font-size:16px'>"
-                                f"{r['Score']}/10</span></div>"
-                                f"<div style='font-size:12px;"
-                                f"color:#64748b;margin-top:6px'>"
-                                f"{r['Action']} | ₹{r['Price']:,.2f} | "
-                                f"RSI {r['RSI']:.0f} | "
-                                f"R:R {r['RR']}:1</div>"
-                                f"<div style='font-size:11px;"
-                                f"color:#94a3b8;margin-top:4px'>"
-                                f"Entry ₹{r['Entry']:,.2f} | "
-                                f"SL ₹{r['SL']:,.2f}</div>"
-                                f"<div style='font-size:11px;"
-                                f"color:#7c3aed;margin-top:4px'>"
-                                f"{r['OptType']} ATM {r['ATM']}</div>"
-                                f"</div>",
+                                f"<div style='background:#ffffff;border:1px solid #e2e8f0;"
+                                f"border-radius:10px;padding:14px;margin-bottom:6px'>"
+                                f"<div style='display:flex;justify-content:space-between'>"
+                                f"<b style='color:#1e293b;font-size:15px'>{r['Stock']}</b>"
+                                f"<span style='color:{dc};font-weight:700'>{r['Score']}/10</span></div>"
+                                f"<div style='font-size:12px;color:#64748b;margin-top:6px'>"
+                                f"{r['Action']} | ₹{r['Price']:,.0f} | RSI {r['RSI']:.0f}</div>"
+                                f"<div style='font-size:11px;color:#94a3b8;margin-top:4px'>"
+                                f"Entry ₹{r['Entry']:,.0f} | SL ₹{r['SL']:,.0f}</div>"
+                                f"<div style='font-size:11px;color:#7c3aed;margin-top:4px'>"
+                                f"{r['OptType']} ATM {r['ATM']}</div></div>",
                                 unsafe_allow_html=True
                             )
-                            if st.button(
-                                "View",
-                                key=f"scan_vw_{gi}_{ci}",
-                                use_container_width=True
-                            ):
+                            if st.button("View", key=f"scan_vw_{gi}_{ci}",
+                                         use_container_width=True):
                                 st.session_state["sn"] = r["Stock"]
                                 st.session_state["st"] = r["Sym"]
                                 st.rerun()
 
-            # ── Score chart ────────────────────────────────
-            if results:
+            # ── Score chart ────────────────────────────────────
+            if results_sorted:
                 st.markdown("---")
-                st.markdown("### Score Overview")
                 import plotly.graph_objects as go_scan
-                results_sorted = sorted(
-                    results,
-                    key=lambda x: x["Combined"],
-                    reverse=True
-                )
                 fig_scan = go_scan.Figure(go_scan.Bar(
                     x=[r["Stock"] for r in results_sorted],
                     y=[r["Combined"] for r in results_sorted],
-                    marker_color=[
-                        "#16a34a" if r["Direction"]=="UPTREND"
-                        else "#dc2626"
-                        for r in results_sorted
-                    ],
-                    text=[
-                        f"{r['Combined']}/10"
-                        for r in results_sorted
-                    ],
+                    marker_color=["#16a34a" if r["Direction"]=="UPTREND"
+                                  else "#dc2626" for r in results_sorted],
+                    text=[f"{r['Combined']}/10" for r in results_sorted],
                     textposition="outside",
                 ))
-                fig_scan.add_hline(
-                    y=8, line_dash="dash",
-                    line_color="#16a34a",
-                    annotation_text="Strong zone (8+)"
-                )
-                fig_scan.add_hline(
-                    y=6, line_dash="dot",
-                    line_color="#f59e0b",
-                    annotation_text="Good zone (6+)"
-                )
+                fig_scan.add_hline(y=8, line_dash="dash", line_color="#16a34a",
+                                   annotation_text="Strong (8+)")
+                fig_scan.add_hline(y=6, line_dash="dot", line_color="#f59e0b",
+                                   annotation_text="Good (6+)")
                 fig_scan.update_layout(
-                    template="plotly_white",
-                    height=320,
-                    yaxis_range=[0, 11],
-                    margin=dict(l=10,r=10,t=20,b=80),
-                    xaxis_tickangle=-35,
-                    showlegend=False,
-                    title="Combined Score (Technical 60% + Historical 40%)"
+                    template="plotly_white", height=300,
+                    yaxis_range=[0,11],
+                    margin=dict(l=10,r=10,t=20,b=60),
+                    xaxis_tickangle=-35, showlegend=False,
+                    title="Combined Score (60% Technical + 40% Historical)"
                 )
-                st.plotly_chart(
-                    fig_scan, use_container_width=True
-                )
+                st.plotly_chart(fig_scan, use_container_width=True)
 
-                # Full table
-                with st.expander("Full results table"):
-                    df_scan = pd.DataFrame([{
-                        "Stock":       r["Stock"],
-                        "Score":       r["Score"],
-                        "Combined":    r["Combined"],
-                        "Reliability": r["Reliability"],
-                        "Action":      r["Action"],
-                        "Price":       f"₹{r['Price']:,.2f}",
-                        "Entry":       f"₹{r['Entry']:,.2f}",
-                        "SL":          f"₹{r['SL']:,.2f}",
-                        "T1":          f"₹{r['T1']:,.2f}",
-                        "T2":          f"₹{r['T2']:,.2f}",
-                        "R:R":         r["RR"],
-                        "ATM Strike":  r["ATM"],
-                        "ITM Strike":  r["ITM"],
-                        "OTM Strike":  r["OTM"],
-                        "RSI":         round(r["RSI"],1),
-                        "ADX":         round(r["ADX"],1),
-                        "Vol":  "✅" if r["VolSurge"] else "❌",
-                    } for r in results_sorted])
-                    st.dataframe(
-                        df_scan,
-                        use_container_width=True,
-                        hide_index=True
-                    )
         # Auto scan loop
         if auto_scan:
             st.info("Next scan in 5 minutes...")

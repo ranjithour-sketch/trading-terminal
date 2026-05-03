@@ -221,30 +221,52 @@ html, body, .stApp, [class*="css"] {
     color: #1e293b !important;
 }
 
-/* ── Mobile-first layout ──────────────────────────── */
+/* ── Layout ───────────────────────────────────────── */
 .block-container {
-    padding-top: 1rem !important;
+    padding-top: 0.5rem !important;
     padding-left: 1rem !important;
     padding-right: 1rem !important;
     max-width: 1400px !important;
 }
-/* Hide Streamlit deploy button area interference */
-[data-testid="stToolbar"] {
-    right: 1rem !important;
-    top: 0.3rem !important;
-}
 
-/* Streamlit header - make transparent on all devices */
+/* Streamlit top header — make fully transparent so our
+   blue gradient header shows cleanly underneath */
 header[data-testid="stHeader"] {
-    background: rgba(244,246,249,0.95) !important;
-    border-bottom: 1px solid #e2e8f0 !important;
-    backdrop-filter: blur(8px) !important;
-    z-index: 999 !important;
+    background: transparent !important;
+    border-bottom: none !important;
+    box-shadow: none !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    overflow: visible !important;
 }
 
-/* Push content below fixed header */
+/* Toolbar (Deploy, Stop, settings) — float top right
+   without covering our header */
+[data-testid="stToolbar"] {
+    position: fixed !important;
+    top: 0 !important;
+    right: 0 !important;
+    z-index: 9999 !important;
+    background: transparent !important;
+    padding: 4px 8px !important;
+}
+[data-testid="stToolbar"] * {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
+
+/* Remove any top margin that pushes content down */
 .main .block-container {
-    padding-top: 1rem !important;
+    padding-top: 0.5rem !important;
+    margin-top: 0 !important;
+}
+
+/* App view container — no top gap */
+[data-testid="stAppViewContainer"] {
+    padding-top: 0 !important;
+}
+.appview-container .main {
+    padding-top: 0 !important;
 }
 
 /* ── Mobile responsive — comprehensive fix ──────── */
@@ -402,6 +424,12 @@ section[data-testid="stSidebar"] {
 section[data-testid="stSidebar"] * {
     color: #1e293b !important;
     font-family: 'Inter', sans-serif !important;
+}
+/* Hide sidebar collapse/expand arrow that corrupts text */
+[data-testid="stSidebarCollapsedControl"] { display:none !important; }
+button[data-testid="collapsedControl"] { display:none !important; }
+section[data-testid="stSidebar"] > div > div:first-child {
+    padding-top: 2px !important;
 }
 section[data-testid="stSidebar"] h1,
 section[data-testid="stSidebar"] h2,
@@ -755,6 +783,38 @@ caption, .stCaption {
     background: #3b82f6 !important;
     border-color: #3b82f6 !important;
 }
+/* ── Sidebar ALL arrow/corruption fixes ────────────── */
+/* Hide collapse arrow buttons */
+[data-testid="stSidebarCollapsedControl"] { display:none !important; }
+[data-testid="stSidebarCollapseButton"]   { display:none !important; }
+button[data-testid="collapsedControl"]    { display:none !important; }
+
+/* Hide expander arrow icon in sidebar — this was causing _arrow_right */
+section[data-testid="stSidebar"] details summary {
+    list-style: none !important;
+}
+section[data-testid="stSidebar"] details summary::-webkit-details-marker {
+    display: none !important;
+}
+section[data-testid="stSidebar"] .streamlit-expanderHeader svg {
+    display: none !important;
+}
+
+/* Hide text input labels in sidebar */
+section[data-testid="stSidebar"] .stTextInput label { 
+    display: none !important; 
+}
+
+/* Hide selectbox labels in sidebar */
+section[data-testid="stSidebar"] .stSelectbox label { 
+    display: none !important; 
+}
+
+/* Remove top padding */
+section[data-testid="stSidebar"] > div:first-child { 
+    padding-top: 0 !important; 
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -2097,12 +2157,10 @@ with st.expander("🔗 Open any tab in a separate browser window"):
 # ══════════════════════════════════════════════════════════
 # SIDEBAR
 # ══════════════════════════════════════════════════════════
-st.sidebar.markdown("## ⚙️ Terminal")
-
 # ── Zerodha Kite Connection ───────────────────────────────
 if KITE_AVAILABLE and KITE_API_KEY:
     if kite_is_connected():
-        st.sidebar.success("⚡ Kite LIVE — Real-time data active")
+        st.sidebar.success("Kite LIVE — Real-time data")
         if st.sidebar.button("Disconnect", key="kite_disc"):
             st.session_state.pop("kite_access_token", None)
             try:
@@ -2116,7 +2174,7 @@ if KITE_AVAILABLE and KITE_API_KEY:
                 pass
             st.rerun()
     else:
-        st.sidebar.warning("📊 Yahoo data (15-min delay)")
+        st.sidebar.warning("Yahoo data (15-min delay)")
         # Check if redirected back from Kite with request_token
         _qp = st.query_params
         if "request_token" in _qp:
@@ -2131,7 +2189,7 @@ if KITE_AVAILABLE and KITE_API_KEY:
                 st.session_state["kite_access_token"] = _tok
                 save_kite_token(_tok)
                 st.query_params.clear()
-                st.sidebar.success("✅ Kite connected!")
+                st.sidebar.success("Kite connected!")
                 st.rerun()
             except Exception as _e:
                 st.sidebar.error(f"Login failed: {_e}")
@@ -2149,47 +2207,58 @@ if KITE_AVAILABLE and KITE_API_KEY:
             f"🔑 Login with Zerodha Kite</a>",
             unsafe_allow_html=True
         )
+        st.sidebar.caption("Login every morning. Zerodha redirects back automatically.")
+        # Show redirect URL as caption - no expander (expanders corrupt)
         st.sidebar.caption(
-            "Login once every morning for live data. "
-            "Zerodha will redirect back automatically."
+            "Redirect URL: http://127.0.0.1:8501/ (local) "
+            "or your Streamlit Cloud URL"
         )
-        # Show redirect URL hint
-        with st.sidebar.expander("Setup help"):
-            st.markdown(
-                "**Kite Redirect URL must be set to:**\n\n"
-                "For local use:\n"
-                "`http://127.0.0.1:8501/`\n\n"
-                "For Streamlit Cloud:\n"
-                "`https://your-app.streamlit.app/`\n\n"
-                "Set this at kite.trade → your app → Edit"
-            )
 else:
-    st.sidebar.info("📊 Yahoo Finance (delayed)")
+    st.sidebar.info("Yahoo Finance (delayed)")
 
 st.sidebar.markdown("---")
 
 # Stock search
-st.sidebar.markdown(
-    "<div style='font-size:12px;font-weight:600;color:#374151;margin-bottom:4px'>Search stock</div>",
-    unsafe_allow_html=True
-)
-srch = st.sidebar.text_input(
-    "Search",
-    placeholder="e.g. Reliance, TCS, HDFC...",
-    label_visibility="collapsed"
-)
-if srch:
-    q    = srch.strip().lower()
-    hits = {k:v for k,v in STOCKS.items()
-            if q in k.lower() or q in v.lower()}
-    if hits:
-        pk = st.sidebar.selectbox("Results",list(hits.keys()))
-        if st.sidebar.button("✅ Load",type="primary"):
-            st.session_state["sn"] = pk
-            st.session_state["st"] = hits[pk]
+# Use empty string "" as label — avoids _arrow_right corruption
+# Do NOT use label_visibility="collapsed" — that causes the bug
+with st.sidebar:
+    st.markdown(
+        "<p style='font-size:12px;color:#64748b;"
+        "margin:0 0 4px 0'>Search stock</p>",
+        unsafe_allow_html=True
+    )
+    srch = st.text_input(
+        "Search stock",
+        placeholder="Reliance, TCS, Gold...",
+        key="sidebar_search_main",
+        label_visibility="hidden"
+    )
+    if srch:
+        q    = srch.strip().lower()
+        hits = {k:v for k,v in STOCKS.items()
+                if q in k.lower() or q in v.lower()}
+        if hits:
+            st.markdown(
+                "<p style='font-size:11px;color:#94a3b8;"
+                "margin:4px 0 2px 0'>Results</p>",
+                unsafe_allow_html=True
+            )
+            pk = st.selectbox(
+                "Select stock",
+                list(hits.keys()),
+                key="sidebar_search_result",
+                label_visibility="hidden"
+            )
+            if st.button(
+                "Load", type="primary", key="sb_load",
+                use_container_width=True
+            ):
+                st.session_state["sn"] = pk
+                st.session_state["st"] = hits[pk]
+                st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Quick pick**")
+st.sidebar.markdown("<b>Quick pick</b>", unsafe_allow_html=True)
 
 # Flat list — no expanders (expanders corrupt label text in Streamlit)
 SIDEBAR_PICKS = {
@@ -2245,7 +2314,7 @@ tf = st.sidebar.selectbox(
 auto_rf = st.sidebar.checkbox("Auto Refresh (2 min)", False)
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Open in new window**")
+st.sidebar.markdown("<b>Open in new window</b>", unsafe_allow_html=True)
 _base_url = "http://localhost:8501"
 for _lname, _lkey in [
     ("📋 Watchlist",    "watchlist"),
@@ -2275,7 +2344,7 @@ for _lname, _lkey in [
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("""
-### 🎯 Entry Rules Summary
+### Entry Rules Summary
 ✅ CE (Buy Call):
 - Score ≥ 7 + RSI 55–68
 - Price > VWAP

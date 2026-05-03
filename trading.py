@@ -2194,24 +2194,24 @@ if KITE_AVAILABLE and KITE_API_KEY:
             except Exception as _e:
                 st.sidebar.error(f"Login failed: {_e}")
 
+
+        # Login URL - v=3 is required by Kite Connect
         _login_url = (
             f"https://kite.trade/connect/login"
             f"?api_key={KITE_API_KEY}&v=3"
         )
-        st.sidebar.markdown(
-            f"<a href='{_login_url}' target='_self' "
-            f"style='display:block;background:#387ed1;"
-            f"color:white;text-align:center;padding:10px 14px;"
-            f"border-radius:8px;text-decoration:none;"
-            f"font-weight:600;font-size:13px;margin:4px 0'>"
-            f"🔑 Login with Zerodha Kite</a>",
-            unsafe_allow_html=True
+
+        st.sidebar.link_button(
+            "Login with Zerodha Kite",
+            url=_login_url,
+            use_container_width=True,
+            type="primary"
         )
-        st.sidebar.caption("Login every morning. Zerodha redirects back automatically.")
-        # Show redirect URL as caption - no expander (expanders corrupt)
         st.sidebar.caption(
-            "Redirect URL: http://127.0.0.1:8501/ (local) "
-            "or your Streamlit Cloud URL"
+            "After login, Zerodha redirects back here automatically."
+        )
+        st.sidebar.caption(
+            "Ensure kite.trade Redirect URL is set to your app URL."
         )
 else:
     st.sidebar.info("Yahoo Finance (delayed)")

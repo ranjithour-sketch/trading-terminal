@@ -1075,6 +1075,60 @@ STOCKS = {
     "Kaynes Tech":      "KAYNES.NS",
     "Syrma SGS":        "SYRMA.NS",
     "Avalon Tech":      "AVALON.NS",
+
+    # ══════════════════════════════════════════════════════
+    # COMMODITIES — MCX (Multi Commodity Exchange)
+    # Yahoo Finance tickers for Indian commodities
+    # ══════════════════════════════════════════════════════
+
+    # ── Precious Metals ───────────────────────────────────
+    "Gold (MCX)":           "GC=F",     # Gold Futures (USD) - global
+    "Silver (MCX)":         "SI=F",     # Silver Futures (USD) - global
+    "Gold Spot":            "GLD",      # SPDR Gold ETF proxy
+    "Silver Spot":          "SLV",      # iShares Silver ETF proxy
+
+    # ── India Gold/Silver ETFs on NSE ─────────────────────
+    "Nippon Gold ETF":      "GOLDBEES.NS",
+    "SBI Gold ETF":         "SBIGETS.NS",
+    "HDFC Gold ETF":        "HDFCMFGETF.NS",
+    "Nippon Silver ETF":    "SILVERBEES.NS",
+
+    # ── Energy ────────────────────────────────────────────
+    "Crude Oil (MCX)":      "CL=F",     # WTI Crude Futures
+    "Brent Crude":          "BZ=F",     # Brent Crude Futures
+    "Natural Gas (MCX)":    "NG=F",     # Natural Gas Futures
+
+    # ── Base Metals ───────────────────────────────────────
+    "Copper (MCX)":         "HG=F",     # Copper Futures
+    "Aluminium":            "ALI=F",    # Aluminium Futures
+    "Nickel":               "NI=F",     # Nickel Futures
+    "Zinc":                 "ZNC=F",    # Zinc Futures
+    "Lead":                 "LE=F",     # Lead Futures
+
+    # ── Agricultural ──────────────────────────────────────
+    "Cotton (MCX)":         "CT=F",     # Cotton Futures
+    "Mentha Oil":           "MO=F",     # Mentha Oil
+    "Cardamom":             "CD=F",     # Cardamom
+    "Castor Seed":          "CS=F",     # Castor Seed
+    "Crude Palm Oil":       "KO=F",     # Palm Oil
+
+    # ── Global Commodity ETFs (tradeable via NSE) ─────────
+    "Mirae Commodity ETF":  "MCXCMMDTY.NS",
+
+    # ── Currency & Forex ──────────────────────────────────
+    "USD/INR":              "USDINR=X",
+    "EUR/INR":              "EURINR=X",
+    "GBP/INR":              "GBPINR=X",
+    "JPY/INR":              "JPYINR=X",
+
+    # ── Global Indices (for context) ──────────────────────
+    "Dow Jones":            "^DJI",
+    "S&P 500":              "^GSPC",
+    "NASDAQ":               "^IXIC",
+    "Nikkei 225":           "^N225",
+    "Hang Seng":            "^HSI",
+    "FTSE 100":             "^FTSE",
+    "Gift Nifty":           "^NSEMDCP50", # proxy
 }
 
 SECTORS = {
@@ -1180,6 +1234,30 @@ SECTORS = {
         "NCC Ltd","KNR Constructions","IRB Infra",
         "Ashoka Buildcon","PSP Projects","RVNL",
         "PNC Infratech","L&T",
+    ],
+
+    # ── Commodity Sectors ─────────────────────────────────
+    "🥇 Precious Metals": [
+        "Gold (MCX)","Silver (MCX)",
+        "Nippon Gold ETF","SBI Gold ETF",
+        "HDFC Gold ETF","Nippon Silver ETF",
+    ],
+    "🛢️ Energy Commodities": [
+        "Crude Oil (MCX)","Brent Crude","Natural Gas (MCX)",
+    ],
+    "⚙️ Base Metals MCX": [
+        "Copper (MCX)","Aluminium","Nickel","Zinc","Lead",
+    ],
+    "🌾 Agricultural MCX": [
+        "Cotton (MCX)","Mentha Oil","Castor Seed",
+        "Crude Palm Oil","Cardamom",
+    ],
+    "💱 Currency": [
+        "USD/INR","EUR/INR","GBP/INR","JPY/INR",
+    ],
+    "🌍 Global Indices": [
+        "Dow Jones","S&P 500","NASDAQ",
+        "Nikkei 225","Hang Seng","FTSE 100",
     ],
 }
 
@@ -2110,6 +2188,15 @@ SIDEBAR_PICKS = {
         "Reliance","ONGC","NTPC","Power Grid",
         "Tata Power","Gail",
     ],
+    "Commodities": [
+        "Gold (MCX)","Silver (MCX)",
+        "Crude Oil (MCX)","Copper (MCX)",
+        "USD/INR","Natural Gas (MCX)",
+    ],
+    "Global": [
+        "Dow Jones","S&P 500","NASDAQ",
+        "Nikkei 225","Hang Seng",
+    ],
 }
 
 # Show as a selectbox for sector then buttons for stocks
@@ -2400,6 +2487,93 @@ with T1:
         tbl["Change ₹"] = tbl["Change ₹"].apply(
             lambda x: f"{x:+.2f}")
         st.dataframe(tbl, width="stretch", hide_index=True)
+
+    # ── Commodity Market Overview ─────────────────────────
+    st.markdown("---")
+    st.markdown("### 🏭 Commodity & Global Markets")
+    st.caption(
+        "MCX commodities, currency rates and global indices. "
+        "Prices from international futures markets."
+    )
+
+    COMMODITY_GROUPS = {
+        "🥇 Precious Metals": [
+            ("Gold",         "GC=F"),
+            ("Silver",       "SI=F"),
+            ("Gold ETF NSE", "GOLDBEES.NS"),
+        ],
+        "🛢️ Energy": [
+            ("Crude WTI",    "CL=F"),
+            ("Brent Crude",  "BZ=F"),
+            ("Natural Gas",  "NG=F"),
+        ],
+        "⚙️ Base Metals": [
+            ("Copper",       "HG=F"),
+            ("Aluminium",    "ALI=F"),
+            ("Nickel",       "NI=F"),
+            ("Zinc",         "ZNC=F"),
+        ],
+        "💱 Currency / INR": [
+            ("USD/INR",      "USDINR=X"),
+            ("EUR/INR",      "EURINR=X"),
+            ("GBP/INR",      "GBPINR=X"),
+            ("JPY/INR",      "JPYINR=X"),
+        ],
+        "🌍 Global Indices": [
+            ("Dow Jones",    "^DJI"),
+            ("S&P 500",      "^GSPC"),
+            ("NASDAQ",       "^IXIC"),
+            ("Nikkei",       "^N225"),
+            ("Hang Seng",    "^HSI"),
+        ],
+    }
+
+    for grp_name, grp_items in COMMODITY_GROUPS.items():
+        st.markdown(
+            f"<div style='font-size:13px;font-weight:700;"
+            f"color:#374151;margin:12px 0 6px'>"
+            f"{grp_name}</div>",
+            unsafe_allow_html=True
+        )
+        cm_cols = st.columns(len(grp_items))
+        for ci, (cm_name, cm_sym) in enumerate(grp_items):
+            cm_lp = live_price(cm_sym)
+            with cm_cols[ci]:
+                if cm_lp["ok"] and cm_lp["p"] > 0:
+                    cm_col = ("#16a34a"
+                              if cm_lp["chg"] >= 0
+                              else "#dc2626")
+                    cm_arr = "▲" if cm_lp["chg"] >= 0 else "▼"
+                    st.markdown(
+                        f"<div style='background:#ffffff;"
+                        f"border:1px solid #e2e8f0;"
+                        f"border-radius:10px;padding:10px 8px;"
+                        f"text-align:center;"
+                        f"box-shadow:0 1px 3px rgba(0,0,0,0.04)'>"
+                        f"<div style='font-size:10px;color:#64748b;"
+                        f"font-weight:500;margin-bottom:3px'>"
+                        f"{cm_name}</div>"
+                        f"<div style='font-size:15px;font-weight:700;"
+                        f"color:#1e293b'>"
+                        f"{cm_lp['p']:,.2f}</div>"
+                        f"<div style='font-size:11px;"
+                        f"color:{cm_col};font-weight:600'>"
+                        f"{cm_arr}{abs(cm_lp['chg']):.2f}%"
+                        f"</div></div>",
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.markdown(
+                        f"<div style='background:#f8fafc;"
+                        f"border:1px solid #e2e8f0;"
+                        f"border-radius:10px;padding:10px 8px;"
+                        f"text-align:center'>"
+                        f"<div style='font-size:10px;color:#94a3b8'>"
+                        f"{cm_name}</div>"
+                        f"<div style='color:#cbd5e1'>—</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
 
 # ╔══════════════════════════════════════════════════════╗
 # ║  TAB 2 — TRADE SETUP                                ║

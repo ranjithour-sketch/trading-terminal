@@ -24,6 +24,35 @@ import math, time, pytz, requests
 import xml.etree.ElementTree as ET
 from ml_engine import train_model, predict_next_move, approximate_realtime
 
+# ── Zerodha Kite Connect ──────────────────────────────────
+try:
+    from kiteconnect import KiteConnect
+    KITE_AVAILABLE = True
+except ImportError:
+    KITE_AVAILABLE = False
+
+# ── Load API credentials ──────────────────────────────────
+# Works both locally (.env file) and on Streamlit Cloud (secrets)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+import os
+
+def _get_secret(key: str, default: str = "") -> str:
+    """Load from Streamlit secrets first, then .env, then env vars."""
+    try:
+        # Streamlit Cloud secrets (production)
+        return st.secrets[key]
+    except:
+        pass
+    # Local .env or environment variable
+    return os.getenv(key, default)
+
+KITE_API_KEY    = _get_secret("KITE_API_KEY")
+KITE_API_SECRET = _get_secret("KITE_API_SECRET")
+
 
 # ─────────────────────────────────────────────────────────
 st.set_page_config(
@@ -42,12 +71,30 @@ CREDS_FILE = os.path.join(
 )
 
 def load_creds():
-    """Load saved credentials from local JSON file."""
+    """
+    Load saved credentials.
+    Priority: Streamlit secrets > local JSON file > nothing
+    """
+    # Load Telegram from Streamlit secrets (cloud deployment)
+    try:
+        if ("tg_token_saved" not in st.session_state
+                and st.secrets.get("tg_token")):
+            st.session_state["tg_token_saved"] = (
+                st.secrets["tg_token"]
+            )
+        if ("tg_chat_saved" not in st.session_state
+                and st.secrets.get("tg_chat")):
+            st.session_state["tg_chat_saved"] = (
+                st.secrets["tg_chat"]
+            )
+    except:
+        pass
+
+    # Load from local JSON file (local use)
     try:
         if os.path.exists(CREDS_FILE):
             with open(CREDS_FILE, "r") as f:
                 data = json.load(f)
-            # Load into session state if not already set
             if ("tg_token_saved" not in st.session_state
                     and data.get("tg_token")):
                 st.session_state["tg_token_saved"] = (
@@ -75,6 +122,58 @@ def save_creds(token: str, chat: str):
 
 # Load credentials on every page load
 load_creds()
+
+# ── Kite session management ───────────────────────────────
+def get_kite() -> "KiteConnect | None":
+    """Returns authenticated KiteConnect instance or None."""
+    if not KITE_AVAILABLE or not KITE_API_KEY:
+        return None
+    token = st.session_state.get("kite_access_token", "")
+    if not token:
+        # Try loading from saved file
+        try:
+            kt_file = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                ".kite_token.json"
+            )
+            if os.path.exists(kt_file):
+                import json as _json
+                kt_data = _json.load(open(kt_file))
+                # Check if token is from today
+                from datetime import date as _date
+                if kt_data.get("date") == str(_date.today()):
+                    token = kt_data.get("token","")
+                    if token:
+                        st.session_state["kite_access_token"] = token
+        except:
+            pass
+    if not token:
+        return None
+    try:
+        kite = KiteConnect(api_key=KITE_API_KEY)
+        kite.set_access_token(token)
+        return kite
+    except:
+        return None
+
+def kite_is_connected() -> bool:
+    """True if Kite session is active today."""
+    return bool(st.session_state.get("kite_access_token",""))
+
+def save_kite_token(token: str):
+    """Save access token to file for today."""
+    try:
+        import json as _json
+        from datetime import date as _date
+        kt_file = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            ".kite_token.json"
+        )
+        _json.dump({"token": token,
+                    "date": str(_date.today())},
+                   open(kt_file, "w"))
+    except:
+        pass
 
 # ── URL-based tab routing ──────────────────────────────────
 # Each tab has a URL: ?tab=watchlist, ?tab=setup, etc.
@@ -1123,44 +1222,162 @@ def best_trading_time():
     if t <= 15*60+30:return "avoid"       # last 30 min
     return "closed"
 
-@st.cache_data(ttl=60)
 def live_price(sym: str) -> dict:
-    try:
-        fi = yf.Ticker(sym).fast_info
-        p  = float(fi.last_price)
-        pv = float(fi.previous_close)
-        ch = round(((p-pv)/pv)*100, 2)
-        return {"ok":True, "p":round(p,2), "prev":round(pv,2),
-                "chg":ch, "chg_abs":round(p-pv,2),
-                "high":round(float(fi.day_high or pv),2),
-                "low": round(float(fi.day_low  or pv),2)}
-    except:
-        return {"ok":False,"p":0,"prev":0,"chg":0,
-                "chg_abs":0,"high":0,"low":0}
+    """
+    Gets live price — uses Kite if connected, else Yahoo Finance.
+    Kite = real-time tick data (zero delay).
+    Yahoo = ~15 second delay via fast_info.
+    No cache when Kite is connected — always fresh.
+    """
+    # ── Try Kite first (real-time) ────────────────────────
+    kite = get_kite()
+    if kite and not sym.startswith("^"):
+        try:
+            # Convert Yahoo symbol to NSE symbol
+            # e.g. HDFCBANK.NS -> NSE:HDFCBANK
+            nse_sym = sym.replace(".NS","").replace(".BO","")
+            exchange = "BSE" if ".BO" in sym else "NSE"
+            quote_key = f"{exchange}:{nse_sym}"
+            quote = kite.quote([quote_key])
+            q     = quote[quote_key]
+            p     = float(q["last_price"])
+            pv    = float(q["ohlc"]["close"])
+            ch    = round(((p-pv)/pv)*100, 2) if pv else 0
+            return {
+                "ok":True,
+                "p":round(p,2),
+                "prev":round(pv,2),
+                "chg":ch,
+                "chg_abs":round(p-pv,2),
+                "high":round(float(q["ohlc"]["high"]),2),
+                "low": round(float(q["ohlc"]["low"]),2),
+                "source":"kite"
+            }
+        except:
+            pass  # Fall through to Yahoo
 
-@st.cache_data(ttl=120)
+    # ── Yahoo Finance fallback ────────────────────────────
+    @st.cache_data(ttl=15)
+    def _yahoo_price(sym_: str) -> dict:
+        try:
+            tk = yf.Ticker(sym_)
+            fi = tk.fast_info
+            p  = float(fi.last_price)
+            pv = float(fi.previous_close)
+            if not p or p <= 0:
+                hist = tk.history(period="2d", interval="1d")
+                if not hist.empty:
+                    p  = float(hist["Close"].iloc[-1])
+                    pv = float(hist["Close"].iloc[-2]) if len(hist)>1 else p
+            ch = round(((p-pv)/pv)*100, 2) if pv else 0
+            return {
+                "ok":True, "p":round(p,2), "prev":round(pv,2),
+                "chg":ch, "chg_abs":round(p-pv,2),
+                "high":round(float(fi.day_high or p),2),
+                "low": round(float(fi.day_low  or p),2),
+                "source":"yahoo"
+            }
+        except:
+            return {"ok":False,"p":0,"prev":0,"chg":0,
+                    "chg_abs":0,"high":0,"low":0,
+                    "source":"yahoo"}
+    return _yahoo_price(sym)
+
 def candles(sym: str, interval: str) -> pd.DataFrame:
-    days = {"5m":4,"15m":20,"30m":40,"1h":59,"1d":300
-            }.get(interval, 20)
-    end   = datetime.now()
-    start = end - timedelta(days=days)
-    try:
-        df = yf.download(sym,
-            start=start.strftime("%Y-%m-%d"),
-            end=(end+timedelta(days=1)).strftime("%Y-%m-%d"),
-            interval=interval,
-            auto_adjust=True, progress=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df.dropna(inplace=True)
-        if not df.empty:
-            df.index = (df.index.tz_convert(IST)
-                        if df.index.tzinfo
-                        else df.index.tz_localize("UTC")
-                                     .tz_convert(IST))
-        return df
-    except:
-        return pd.DataFrame()
+    """
+    Fetch OHLCV candles — Kite if connected (real-time),
+    else Yahoo Finance (~15 min delay for intraday).
+    """
+    # ── Try Kite first ────────────────────────────────────
+    kite = get_kite()
+    if kite and not sym.startswith("^"):
+        try:
+            nse_sym   = sym.replace(".NS","").replace(".BO","")
+            exchange  = "BSE" if ".BO" in sym else "NSE"
+
+            # Kite interval mapping
+            kite_interval = {
+                "1m":  "minute",
+                "5m":  "5minute",
+                "15m": "15minute",
+                "30m": "30minute",
+                "1h":  "60minute",
+                "1d":  "day",
+            }.get(interval, "15minute")
+
+            # Date range
+            days_ = {
+                "minute":180,"5minute":100,
+                "15minute":200,"30minute":200,
+                "60minute":400,"day":2000
+            }.get(kite_interval, 200)
+
+            from_dt = datetime.now() - timedelta(days=days_)
+            to_dt   = datetime.now()
+
+            inst_token = None
+            try:
+                # Get instrument token
+                instruments = kite.instruments("NSE")
+                for inst in instruments:
+                    if inst["tradingsymbol"] == nse_sym:
+                        inst_token = inst["instrument_token"]
+                        break
+            except:
+                pass
+
+            if inst_token:
+                hist = kite.historical_data(
+                    inst_token,
+                    from_date=from_dt,
+                    to_date=to_dt,
+                    interval=kite_interval,
+                    continuous=False
+                )
+                if hist:
+                    df_k = pd.DataFrame(hist)
+                    df_k.rename(columns={
+                        "date":"Date",
+                        "open":"Open","high":"High",
+                        "low":"Low","close":"Close",
+                        "volume":"Volume"
+                    }, inplace=True)
+                    df_k.set_index("Date", inplace=True)
+                    if df_k.index.tzinfo is None:
+                        df_k.index = df_k.index.tz_localize(IST)
+                    else:
+                        df_k.index = df_k.index.tz_convert(IST)
+                    df_k.dropna(inplace=True)
+                    return df_k
+        except:
+            pass  # Fall through to Yahoo
+
+    # ── Yahoo Finance fallback (cached) ───────────────────
+    @st.cache_data(ttl=60)
+    def _yahoo_candles(sym_: str, interval_: str) -> pd.DataFrame:
+        days = {"1m":1,"5m":4,"15m":20,"30m":40,
+                "1h":59,"1d":300}.get(interval_, 20)
+        end   = datetime.now()
+        start = end - timedelta(days=days)
+        try:
+            df = yf.download(sym_,
+                start=start.strftime("%Y-%m-%d"),
+                end=(end+timedelta(days=1)).strftime("%Y-%m-%d"),
+                interval=interval_,
+                auto_adjust=True, progress=False,
+                threads=False)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            df.dropna(inplace=True)
+            if not df.empty:
+                df.index = (df.index.tz_convert(IST)
+                            if df.index.tzinfo
+                            else df.index.tz_localize("UTC")
+                                         .tz_convert(IST))
+            return df
+        except:
+            return pd.DataFrame()
+    return _yahoo_candles(sym, interval)
 
 @st.cache_data(ttl=300)
 def bulk_prices(names: list) -> pd.DataFrame:
@@ -1788,6 +2005,75 @@ with st.expander("🔗 Open any tab in a separate browser window"):
 # ══════════════════════════════════════════════════════════
 st.sidebar.markdown("## ⚙️ Terminal")
 
+# ── Zerodha Kite Connection ───────────────────────────────
+if KITE_AVAILABLE and KITE_API_KEY:
+    if kite_is_connected():
+        st.sidebar.success("⚡ Kite LIVE — Real-time data active")
+        if st.sidebar.button("Disconnect", key="kite_disc"):
+            st.session_state.pop("kite_access_token", None)
+            try:
+                _kt = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    ".kite_token.json"
+                )
+                if os.path.exists(_kt):
+                    os.remove(_kt)
+            except:
+                pass
+            st.rerun()
+    else:
+        st.sidebar.warning("📊 Yahoo data (15-min delay)")
+        # Check if redirected back from Kite with request_token
+        _qp = st.query_params
+        if "request_token" in _qp:
+            _req = _qp["request_token"]
+            try:
+                _k2 = KiteConnect(api_key=KITE_API_KEY)
+                _sess = _k2.generate_session(
+                    _req,
+                    api_secret=KITE_API_SECRET
+                )
+                _tok = _sess["access_token"]
+                st.session_state["kite_access_token"] = _tok
+                save_kite_token(_tok)
+                st.query_params.clear()
+                st.sidebar.success("✅ Kite connected!")
+                st.rerun()
+            except Exception as _e:
+                st.sidebar.error(f"Login failed: {_e}")
+
+        _login_url = (
+            f"https://kite.trade/connect/login"
+            f"?api_key={KITE_API_KEY}&v=3"
+        )
+        st.sidebar.markdown(
+            f"<a href='{_login_url}' target='_self' "
+            f"style='display:block;background:#387ed1;"
+            f"color:white;text-align:center;padding:10px 14px;"
+            f"border-radius:8px;text-decoration:none;"
+            f"font-weight:600;font-size:13px;margin:4px 0'>"
+            f"🔑 Login with Zerodha Kite</a>",
+            unsafe_allow_html=True
+        )
+        st.sidebar.caption(
+            "Login once every morning for live data. "
+            "Zerodha will redirect back automatically."
+        )
+        # Show redirect URL hint
+        with st.sidebar.expander("⚙️ Setup help"):
+            st.markdown(
+                "**Kite Redirect URL must be set to:**\n\n"
+                "For local use:\n"
+                "`http://127.0.0.1:8501/`\n\n"
+                "For Streamlit Cloud:\n"
+                "`https://your-app.streamlit.app/`\n\n"
+                "Set this at kite.trade → your app → Edit"
+            )
+else:
+    st.sidebar.info("📊 Yahoo Finance (delayed)")
+
+st.sidebar.markdown("---")
+
 # Stock search
 srch = st.sidebar.text_input(
     "🔍 Search stock",
@@ -2133,7 +2419,22 @@ with T2:
     st.markdown("---")
 
     # ── Live price card ───────────────────────────────────
-    lp = live_price(stick)
+    # Force clear cache to get freshest data
+    _lp_fresh = live_price(stick)
+    lp = _lp_fresh
+
+    # Show data freshness note
+    st.markdown(
+        "<div style='background:#fffbeb;border:1px solid #fcd34d;"
+        "border-radius:8px;padding:6px 14px;margin-bottom:8px;"
+        "font-size:12px;color:#92400e;display:flex;"
+        "justify-content:space-between;align-items:center'>"
+        "<span>⚡ <b>Live price</b> refreshes every 15 seconds via Yahoo Finance</span>"
+        "<span>📊 <b>Chart candles</b> have ~15 min delay (Yahoo Finance limitation) — "
+        "Real-time approximation bridges this gap</span>"
+        "</div>",
+        unsafe_allow_html=True
+    )
     if lp["ok"]:
         pc  = "#00ff88" if lp["chg"]>=0 else "#ff4455"
         arr = "▲" if lp["chg"]>=0 else "▼"
@@ -2778,6 +3079,474 @@ with T2:
         t20.index   = t20.index.strftime("%d-%b %H:%M")
         st.dataframe(t20.round(2), width="stretch")
 
+    # ══════════════════════════════════════════════════════
+    # DURATION-BASED SIGNAL ENGINE
+    # ══════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### ⏱️ Duration Signal — Hold or Exit?")
+    st.caption(
+        "Enter your trade details below. "
+        "The terminal will tell you every day whether "
+        "to hold your position or exit early."
+    )
+
+    # ── Trade details input ────────────────────────────────
+    with st.expander(
+        "Enter your trade details",
+        expanded="dur_expiry" not in st.session_state
+    ):
+        di1, di2, di3 = st.columns(3)
+        with di1:
+            dur_type = st.selectbox(
+                "Option type",
+                ["CE (Call — Bullish)",
+                 "PE (Put — Bearish)"],
+                key="dur_type"
+            )
+            dur_duration = st.selectbox(
+                "Holding duration",
+                ["Intraday (exit by 2:45 PM)",
+                 "Weekly (next Thursday expiry)",
+                 "Monthly (last Thursday expiry)",
+                 "Custom expiry date"],
+                key="dur_duration"
+            )
+        with di2:
+            dur_entry = st.number_input(
+                "Your entry price (Rs)",
+                value=0.0, step=0.5,
+                min_value=0.0,
+                key="dur_entry"
+            )
+            dur_sl = st.number_input(
+                "Your stop loss (Rs)",
+                value=sig["sl_long"]
+                if "CE" in dur_type else sig["sl_short"]
+                if sig else 0.0,
+                step=0.5,
+                key="dur_sl"
+            )
+        with di3:
+            dur_target = st.number_input(
+                "Your target price (Rs)",
+                value=sig["tgt1"]
+                if "CE" in dur_type else sig["tgt1s"]
+                if sig else 0.0,
+                step=0.5,
+                key="dur_target"
+            )
+            if "Custom" in dur_duration:
+                dur_expiry = st.date_input(
+                    "Custom expiry date",
+                    key="dur_custom_expiry"
+                )
+            else:
+                # Auto-calculate next Thursday
+                today   = now_ist().date()
+                days_to_thu = (3 - today.weekday()) % 7
+                if days_to_thu == 0:
+                    days_to_thu = 7
+                if "Monthly" in dur_duration:
+                    # Last Thursday of current month
+                    import calendar
+                    last_day = calendar.monthrange(
+                        today.year, today.month
+                    )[1]
+                    from datetime import date as date_type
+                    last_thu = max(
+                        date_type(today.year, today.month, d)
+                        for d in range(1, last_day+1)
+                        if date_type(
+                            today.year, today.month, d
+                        ).weekday() == 3
+                    )
+                    dur_expiry = last_thu
+                elif "Intraday" in dur_duration:
+                    dur_expiry = today
+                else:
+                    from datetime import date as date_type
+                    dur_expiry = (
+                        today +
+                        timedelta(days=days_to_thu)
+                    )
+                st.date_input(
+                    "Expiry date",
+                    value=dur_expiry,
+                    disabled=True,
+                    key="dur_expiry_display"
+                )
+
+        if st.button(
+            "Generate Hold/Exit Analysis",
+            type="primary",
+            key="dur_analyse",
+            use_container_width=True
+        ):
+            st.session_state["dur_expiry"]  = str(dur_expiry)
+            st.session_state["dur_entry"]   = dur_entry
+            st.session_state["dur_sl"]      = dur_sl
+            st.session_state["dur_target"]  = dur_target
+            st.session_state["dur_type"]    = dur_type
+            st.session_state["dur_active"]  = True
+
+    # ── Show analysis if active ────────────────────────────
+    if st.session_state.get("dur_active") and sig:
+        from datetime import date as date_type, datetime as dt_type
+        import math
+
+        # Load saved values
+        try:
+            expiry_date = date_type.fromisoformat(
+                st.session_state.get("dur_expiry", "")
+            )
+        except:
+            expiry_date = now_ist().date()
+
+        s_entry  = st.session_state.get("dur_entry",  0)
+        s_sl     = st.session_state.get("dur_sl",     0)
+        s_target = st.session_state.get("dur_target", 0)
+        s_type   = st.session_state.get("dur_type",   "CE")
+        today    = now_ist().date()
+
+        days_left  = (expiry_date - today).days
+        days_total = max(
+            (expiry_date - (
+                expiry_date - timedelta(days=7)
+            )).days, 1
+        )
+        is_ce = "CE" in s_type
+
+        # ── Current price & P&L ───────────────────────────
+        cur_price = lp["p"] if lp["ok"] else sig["cp"]
+        pnl_pts   = (
+            cur_price - s_entry if is_ce
+            else s_entry - cur_price
+        )
+        pnl_pct   = round(
+            pnl_pts / (s_entry + 0.001) * 100, 2
+        ) if s_entry > 0 else 0
+
+        # ── Hold/Exit decision engine ──────────────────────
+        hold_signals   = []
+        exit_signals   = []
+        warning_signals= []
+
+        # 1. Price vs EMA21
+        if is_ce:
+            if cur_price > sig["e21v"]:
+                hold_signals.append(
+                    f"✅ Price ₹{cur_price:,} is above EMA21 "
+                    f"₹{sig['e21v']:,} — trend intact"
+                )
+            else:
+                exit_signals.append(
+                    f"❌ Price ₹{cur_price:,} broke below "
+                    f"EMA21 ₹{sig['e21v']:,} — exit now"
+                )
+        else:
+            if cur_price < sig["e21v"]:
+                hold_signals.append(
+                    f"✅ Price ₹{cur_price:,} is below EMA21 "
+                    f"₹{sig['e21v']:,} — trend intact"
+                )
+            else:
+                exit_signals.append(
+                    f"❌ Price ₹{cur_price:,} broke above "
+                    f"EMA21 ₹{sig['e21v']:,} — exit now"
+                )
+
+        # 2. Stop loss check
+        if s_sl > 0:
+            if is_ce and cur_price <= s_sl:
+                exit_signals.append(
+                    f"🚨 Stop loss hit — price ₹{cur_price:,} "
+                    f"at or below SL ₹{s_sl:,} — EXIT IMMEDIATELY"
+                )
+            elif not is_ce and cur_price >= s_sl:
+                exit_signals.append(
+                    f"🚨 Stop loss hit — price ₹{cur_price:,} "
+                    f"at or above SL ₹{s_sl:,} — EXIT IMMEDIATELY"
+                )
+            else:
+                dist = abs(cur_price - s_sl)
+                dist_pct = round(dist / cur_price * 100, 2)
+                hold_signals.append(
+                    f"✅ Stop loss safe — "
+                    f"₹{dist:,.0f} ({dist_pct}%) away"
+                )
+
+        # 3. Target check
+        if s_target > 0:
+            if is_ce and cur_price >= s_target:
+                warning_signals.append(
+                    f"🎯 Target ₹{s_target:,} reached — "
+                    f"book at least 50% quantity now"
+                )
+            elif not is_ce and cur_price <= s_target:
+                warning_signals.append(
+                    f"🎯 Target ₹{s_target:,} reached — "
+                    f"book at least 50% quantity now"
+                )
+
+        # 4. CPR bias
+        if sig["cpr_bias"] == "Bullish" and is_ce:
+            hold_signals.append(
+                "✅ CPR bias Bullish — supports CE position"
+            )
+        elif sig["cpr_bias"] == "Bearish" and not is_ce:
+            hold_signals.append(
+                "✅ CPR bias Bearish — supports PE position"
+            )
+        elif sig["cpr_position"] == "INSIDE":
+            warning_signals.append(
+                "⚠️ Price inside CPR — choppy zone, "
+                "reduce position size"
+            )
+        else:
+            exit_signals.append(
+                f"❌ CPR bias {sig['cpr_bias']} "
+                f"is against your position"
+            )
+
+        # 5. RSI check
+        rsi_v = sig["rv"]
+        if is_ce:
+            if rsi_v > 75:
+                warning_signals.append(
+                    f"⚠️ RSI {rsi_v:.0f} is overbought — "
+                    "consider booking partial profit"
+                )
+            elif 50 <= rsi_v <= 75:
+                hold_signals.append(
+                    f"✅ RSI {rsi_v:.0f} in bullish zone — "
+                    "momentum intact"
+                )
+            else:
+                warning_signals.append(
+                    f"⚠️ RSI {rsi_v:.0f} weakening — "
+                    "watch closely"
+                )
+        else:
+            if rsi_v < 25:
+                warning_signals.append(
+                    f"⚠️ RSI {rsi_v:.0f} is oversold — "
+                    "consider booking partial profit"
+                )
+            elif 25 <= rsi_v <= 50:
+                hold_signals.append(
+                    f"✅ RSI {rsi_v:.0f} in bearish zone — "
+                    "momentum intact"
+                )
+            else:
+                warning_signals.append(
+                    f"⚠️ RSI {rsi_v:.0f} weakening — "
+                    "watch closely"
+                )
+
+        # 6. Time decay warning
+        if days_left <= 1:
+            exit_signals.append(
+                "🚨 Expiry tomorrow — exit today by 2:45 PM "
+                "unless deeply profitable"
+            )
+        elif days_left <= 2:
+            warning_signals.append(
+                f"⚠️ Only {days_left} days to expiry — "
+                "theta decay is very high now, "
+                "consider exiting if not in profit"
+            )
+        elif days_left <= 4:
+            warning_signals.append(
+                f"⚠️ {days_left} days to expiry — "
+                "time decay accelerating"
+            )
+        else:
+            hold_signals.append(
+                f"✅ {days_left} days to expiry — "
+                "enough time for the move to develop"
+            )
+
+        # 7. Volume check
+        if sig["vsurge"]:
+            hold_signals.append(
+                "✅ Volume surge confirms price move"
+            )
+
+        # 8. Signal score
+        tech_score = (
+            sig["up_score"] if is_ce else sig["dn_score"]
+        )
+        if tech_score >= 7:
+            hold_signals.append(
+                f"✅ Technical score {tech_score}/10 — "
+                "strong signal, hold"
+            )
+        elif tech_score >= 5:
+            warning_signals.append(
+                f"⚠️ Technical score {tech_score}/10 — "
+                "weakening, watch"
+            )
+        else:
+            exit_signals.append(
+                f"❌ Technical score {tech_score}/10 — "
+                "signal too weak, consider exiting"
+            )
+
+        # ── Final verdict ──────────────────────────────────
+        if exit_signals:
+            verdict      = "EXIT NOW"
+            verdict_col  = "#dc2626"
+            verdict_bg   = "#fef2f2"
+            verdict_icon = "🔴"
+        elif len(warning_signals) >= 2:
+            verdict      = "REDUCE POSITION"
+            verdict_col  = "#d97706"
+            verdict_bg   = "#fffbeb"
+            verdict_icon = "🟡"
+        elif len(hold_signals) >= 3:
+            verdict      = "HOLD"
+            verdict_col  = "#16a34a"
+            verdict_bg   = "#f0fdf4"
+            verdict_icon = "🟢"
+        else:
+            verdict      = "MONITOR CLOSELY"
+            verdict_col  = "#d97706"
+            verdict_bg   = "#fffbeb"
+            verdict_icon = "🟡"
+
+        # ── Display verdict ────────────────────────────────
+        st.markdown(
+            f"<div style='background:{verdict_bg};"
+            f"border:2px solid {verdict_col};"
+            f"border-radius:14px;padding:20px 24px;"
+            f"margin:12px 0;text-align:center'>"
+            f"<div style='font-size:13px;color:#64748b;"
+            f"letter-spacing:2px;text-transform:uppercase'>"
+            f"Today's Recommendation — {today.strftime('%d %b %Y')}"
+            f"</div>"
+            f"<div style='font-size:48px;font-weight:700;"
+            f"color:{verdict_col};margin:8px 0;line-height:1'>"
+            f"{verdict_icon} {verdict}</div>"
+            f"<div style='font-size:14px;color:#475569'>"
+            f"{sname} {s_type} | "
+            f"Entry ₹{s_entry:,} | "
+            f"Expiry {expiry_date.strftime('%d %b %Y')} "
+            f"({days_left} days left)"
+            f"</div></div>",
+            unsafe_allow_html=True
+        )
+
+        # ── P&L display ────────────────────────────────────
+        pl1, pl2, pl3, pl4 = st.columns(4)
+        pnl_col_m = "normal" if pnl_pts >= 0 else "inverse"
+        pl1.metric(
+            "Current Price",
+            f"₹{cur_price:,.2f}",
+            delta=f"{pnl_pts:+.2f} pts",
+            delta_color=pnl_col_m
+        )
+        pl2.metric("Entry", f"₹{s_entry:,}")
+        pl3.metric("Stop Loss", f"₹{s_sl:,}")
+        pl4.metric("Target", f"₹{s_target:,}")
+
+        # P&L %
+        pnl_c = "#16a34a" if pnl_pct >= 0 else "#dc2626"
+        st.markdown(
+            f"<div style='background:#f8fafc;"
+            f"border-radius:8px;padding:10px 16px;"
+            f"font-size:14px;margin:8px 0'>"
+            f"Unrealised P&L: "
+            f"<b style='color:{pnl_c}'>{pnl_pct:+.2f}%"
+            f" ({pnl_pts:+.2f} pts)</b>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+        # ── Signal breakdown ───────────────────────────────
+        st.markdown("#### Signal breakdown")
+
+        col_hold, col_warn, col_exit = st.columns(3)
+        with col_hold:
+            st.markdown(
+                f"<div style='font-size:13px;font-weight:700;"
+                f"color:#16a34a;margin-bottom:8px'>"
+                f"✅ Hold signals ({len(hold_signals)})</div>",
+                unsafe_allow_html=True
+            )
+            for hs in hold_signals:
+                st.markdown(
+                    f"<div style='background:#f0fdf4;"
+                    f"border-left:3px solid #86efac;"
+                    f"border-radius:0 6px 6px 0;"
+                    f"padding:8px 12px;margin:4px 0;"
+                    f"font-size:12px;color:#166534'>"
+                    f"{hs}</div>",
+                    unsafe_allow_html=True
+                )
+
+        with col_warn:
+            st.markdown(
+                f"<div style='font-size:13px;font-weight:700;"
+                f"color:#d97706;margin-bottom:8px'>"
+                f"⚠️ Warnings ({len(warning_signals)})</div>",
+                unsafe_allow_html=True
+            )
+            for ws in warning_signals:
+                st.markdown(
+                    f"<div style='background:#fffbeb;"
+                    f"border-left:3px solid #fcd34d;"
+                    f"border-radius:0 6px 6px 0;"
+                    f"padding:8px 12px;margin:4px 0;"
+                    f"font-size:12px;color:#92400e'>"
+                    f"{ws}</div>",
+                    unsafe_allow_html=True
+                )
+
+        with col_exit:
+            st.markdown(
+                f"<div style='font-size:13px;font-weight:700;"
+                f"color:#dc2626;margin-bottom:8px'>"
+                f"❌ Exit signals ({len(exit_signals)})</div>",
+                unsafe_allow_html=True
+            )
+            for es in exit_signals:
+                st.markdown(
+                    f"<div style='background:#fef2f2;"
+                    f"border-left:3px solid #fca5a5;"
+                    f"border-radius:0 6px 6px 0;"
+                    f"padding:8px 12px;margin:4px 0;"
+                    f"font-size:12px;color:#991b1b'>"
+                    f"{es}</div>",
+                    unsafe_allow_html=True
+                )
+
+        # ── Daily check reminder ───────────────────────────
+        st.markdown("---")
+        st.markdown("#### 📅 Daily holding checklist")
+        _dir_word  = "above" if is_ce else "below"
+        _bias_word = "Bullish" if is_ce else "Bearish"
+        st.info(
+            f"Check these every morning at 9:30 AM "
+            f"while holding {sname} {s_type}:\n\n"
+            f"**1.** Is price still {_dir_word} "
+            f"EMA21 (₹{sig['e21v']:,})?\n"
+            f"**2.** Is CPR bias still {_bias_word}?\n"
+            f"**3.** Is RSI still in the right zone?\n"
+            f"**4.** Did any bad news come overnight?\n"
+            f"**5.** Days to expiry: **{days_left}** — "
+            f"exit by 2:45 PM on expiry day no matter what."
+        )
+
+        if st.button(
+            "Clear — start new trade",
+            key="dur_clear",
+            type="secondary"
+        ):
+            for k in ["dur_active","dur_expiry","dur_entry",
+                      "dur_sl","dur_target","dur_type"]:
+                st.session_state.pop(k, None)
+            st.rerun()
+
 # ╔══════════════════════════════════════════════════════╗
 # ║  TAB 3 — SMART MONEY                                ║
 # ╚══════════════════════════════════════════════════════╝
@@ -3060,6 +3829,13 @@ with T3:
         key="run_scanner",
         use_container_width=True
     )
+    if st.button(
+        "🔄 Clear cache & refresh data",
+        key="scan_clear_cache",
+        help="Forces Yahoo Finance to fetch fresh data"
+    ):
+        st.cache_data.clear()
+        st.rerun()
     st.markdown(
         "<div style='margin:6px 0;padding:10px 14px;"
         "background:#f0f9ff;border:1px solid #bae6fd;"
@@ -3432,17 +4208,33 @@ with T3:
                     f"</div>",
                     unsafe_allow_html=True
                 )
-                bc1, bc2 = st.columns(2)
+                bc1, bc2, bc3 = st.columns(3)
                 with bc1:
-                    if st.button(f"📊 Analyse", key=f"scan_an_{idx_r}",
-                                 type="primary", use_container_width=True):
+                    if st.button(
+                        "🔬 Full Analysis",
+                        key=f"scan_full_{idx_r}",
+                        type="primary",
+                        use_container_width=True
+                    ):
+                        # Toggle expanded analysis for this stock
+                        key = f"expand_{idx_r}"
+                        st.session_state[key] = not st.session_state.get(key, False)
+                with bc2:
+                    if st.button(
+                        "📊 Trade Setup →",
+                        key=f"scan_an_{idx_r}",
+                        use_container_width=True
+                    ):
                         st.session_state["sn"] = r["Stock"]
                         st.session_state["st"] = r["Sym"]
                         st.rerun()
-                with bc2:
+                with bc3:
                     if tg_configured():
-                        if st.button(f"📱 Send Signal", key=f"scan_tg_{idx_r}",
-                                     use_container_width=True):
+                        if st.button(
+                            "📱 Send Signal",
+                            key=f"scan_tg_{idx_r}",
+                            use_container_width=True
+                        ):
                             tok = st.session_state.get("tg_token_saved","")
                             cid = st.session_state.get("tg_chat_saved","")
                             msg = (
@@ -3459,7 +4251,348 @@ with T3:
                                 st.success(f"✅ {r['Stock']} sent!")
                             else:
                                 st.error("❌ Failed — check Telegram setup")
-                st.markdown("<div style='margin:4px 0'></div>", unsafe_allow_html=True)
+
+                # ── COMBINED ANALYSIS PANEL ────────────────────
+                if st.session_state.get(f"expand_{idx_r}", False):
+                    with st.container():
+                        st.markdown(
+                            f"<div style='background:#f0f9ff;"
+                            f"border:2px solid #3b82f6;"
+                            f"border-radius:14px;padding:20px;"
+                            f"margin:8px 0'>"
+                            f"<div style='font-size:16px;font-weight:700;"
+                            f"color:#1e40af;margin-bottom:16px'>"
+                            f"🔬 Full Analysis — {r['Stock']}"
+                            f"</div></div>",
+                            unsafe_allow_html=True
+                        )
+
+                        # Load data for this stock
+                        _sym  = r["Sym"]
+                        _name = r["Stock"]
+                        _lp   = live_price(_sym)
+
+                        with st.spinner(
+                            f"Loading full analysis for {_name}..."
+                        ):
+                            _df  = candles(_sym, scan_tf)
+                            _sig = compute_all(_df, _lp) if (
+                                _df is not None and
+                                len(_df) >= 55
+                            ) else None
+                            # ML
+                            _df_ml = candles(_sym, "1d")
+                            _model = None
+                            _pred  = None
+                            if _df_ml is not None and len(_df_ml) >= 100:
+                                _model = train_model(_df_ml)
+                                if _model.get("ok"):
+                                    _pred = predict_next_move(
+                                        _df_ml, _model
+                                    )
+                            # Real-time approximation
+                            _rt = approximate_realtime(
+                                _df,
+                                _lp["p"] if _lp["ok"] else 0
+                            ) if _df is not None else None
+
+                        # ── TOP ROW: Scanner + ML side by side ─────
+                        col_sc, col_ml = st.columns(2)
+
+                        with col_sc:
+                            st.markdown(
+                                "<div style='background:#ffffff;"
+                                "border:1px solid #e2e8f0;"
+                                "border-radius:12px;padding:16px'>"
+                                "<div style='font-size:13px;font-weight:700;"
+                                "color:#64748b;margin-bottom:12px;"
+                                "text-transform:uppercase;letter-spacing:1px'>"
+                                "📊 Scanner Signal</div>",
+                                unsafe_allow_html=True
+                            )
+                            dir_c = (
+                                "#16a34a"
+                                if r["Direction"] == "UPTREND"
+                                else "#dc2626"
+                            )
+                            st.markdown(
+                                f"<div style='font-size:28px;"
+                                f"font-weight:700;color:{dir_c}'>"
+                                f"{r['Action']}</div>"
+                                f"<div style='font-size:13px;"
+                                f"color:#475569;margin-top:4px'>"
+                                f"Score: <b>{r['Score']}/10</b> | "
+                                f"Combined: <b>{r['Combined']}/10</b>"
+                                f"</div>"
+                                f"<div style='font-size:12px;"
+                                f"color:#64748b;margin-top:8px'>"
+                                f"Reliability: {r['Reliability']}</div>"
+                                f"<hr style='border-color:#f1f5f9'>"
+                                f"<table style='width:100%;font-size:13px'>"
+                                f"<tr><td style='color:#64748b'>Entry</td>"
+                                f"<td style='text-align:right;color:#16a34a;"
+                                f"font-weight:700'>₹{r['Entry']:,.2f}</td></tr>"
+                                f"<tr><td style='color:#64748b'>Stop Loss</td>"
+                                f"<td style='text-align:right;color:#dc2626;"
+                                f"font-weight:700'>₹{r['SL']:,.2f}</td></tr>"
+                                f"<tr><td style='color:#64748b'>Target 1</td>"
+                                f"<td style='text-align:right;color:#1d4ed8;"
+                                f"font-weight:700'>₹{r['T1']:,.2f}</td></tr>"
+                                f"<tr><td style='color:#64748b'>Target 2</td>"
+                                f"<td style='text-align:right;color:#1d4ed8;"
+                                f"font-weight:700'>₹{r['T2']:,.2f}</td></tr>"
+                                f"<tr><td style='color:#64748b'>R:R Ratio</td>"
+                                f"<td style='text-align:right;font-weight:700;"
+                                f"color:#1e293b'>{r['RR']}:1</td></tr>"
+                                f"<tr><td style='color:#64748b'>RSI</td>"
+                                f"<td style='text-align:right;"
+                                f"color:#1e293b'>{r['RSI']:.0f}</td></tr>"
+                                f"<tr><td style='color:#64748b'>ADX</td>"
+                                f"<td style='text-align:right;"
+                                f"color:#1e293b'>{r['ADX']:.0f}</td></tr>"
+                                f"</table>"
+                                f"<hr style='border-color:#f1f5f9'>"
+                                f"<div style='font-size:12px;color:#7c3aed;"
+                                f"font-weight:600'>OPTIONS</div>"
+                                f"<div style='font-size:12px;color:#475569;"
+                                f"margin-top:4px'>"
+                                f"{r['OptType']}<br>"
+                                f"✅ ATM {r['ATM']} (recommended)<br>"
+                                f"ITM {r['ITM']} | OTM {r['OTM']}"
+                                f"</div>"
+                                f"<div style='margin-top:8px;font-size:12px;"
+                                f"color:#475569'>"
+                                f"CPR: Price <b>{r.get('CPR_Pos','—')}</b> | "
+                                f"{r.get('CPR_Bias','—')}"
+                                f"{'  ✨ Virgin CPR' if r.get('Virgin_CPR') else ''}"
+                                f"</div></div>",
+                                unsafe_allow_html=True
+                            )
+
+                        with col_ml:
+                            st.markdown(
+                                "<div style='background:#ffffff;"
+                                "border:1px solid #e2e8f0;"
+                                "border-radius:12px;padding:16px'>"
+                                "<div style='font-size:13px;font-weight:700;"
+                                "color:#64748b;margin-bottom:12px;"
+                                "text-transform:uppercase;letter-spacing:1px'>"
+                                "🤖 ML Prediction (1d)</div>",
+                                unsafe_allow_html=True
+                            )
+
+                            if _pred and _pred.get("ok"):
+                                pc_ = _pred["sig_color"]
+                                pred_bg = (
+                                    "#f0fdf4"
+                                    if _pred["prediction"]=="UPTREND"
+                                    else "#fef2f2"
+                                    if _pred["prediction"]=="DOWNTREND"
+                                    else "#fffbeb"
+                                )
+                                st.markdown(
+                                    f"<div style='background:{pred_bg};"
+                                    f"border-radius:8px;padding:14px;"
+                                    f"text-align:center;margin-bottom:12px'>"
+                                    f"<div style='font-size:32px;font-weight:700;"
+                                    f"color:{pc_}'>{_pred['prediction']}</div>"
+                                    f"<div style='font-size:16px;color:{pc_};"
+                                    f"font-weight:600'>{_pred['signal']}</div>"
+                                    f"<div style='font-size:13px;color:#64748b;"
+                                    f"margin-top:6px'>"
+                                    f"{_pred['reliability']} "
+                                    f"({_pred['confidence']}%)"
+                                    f"</div></div>",
+                                    unsafe_allow_html=True
+                                )
+
+                                # Probability bars
+                                probs = _pred["probabilities"]
+                                for pname, pval in probs.items():
+                                    bc_ = (
+                                        "#16a34a" if pname=="UPTREND"
+                                        else "#dc2626" if pname=="DOWNTREND"
+                                        else "#f59e0b"
+                                    )
+                                    st.markdown(
+                                        f"<div style='margin:4px 0'>"
+                                        f"<div style='display:flex;"
+                                        f"justify-content:space-between;"
+                                        f"font-size:12px;color:#475569'>"
+                                        f"<span>{pname}</span>"
+                                        f"<span style='font-weight:600;"
+                                        f"color:{bc_}'>{pval:.1f}%</span></div>"
+                                        f"<div style='background:#f1f5f9;"
+                                        f"height:6px;border-radius:3px;margin-top:2px'>"
+                                        f"<div style='background:{bc_};"
+                                        f"width:{pval:.0f}%;height:6px;"
+                                        f"border-radius:3px'></div></div></div>",
+                                        unsafe_allow_html=True
+                                    )
+
+                                # Model accuracy
+                                st.markdown(
+                                    f"<div style='margin-top:10px;font-size:12px;"
+                                    f"color:#64748b'>"
+                                    f"Model accuracy: "
+                                    f"<b>{_pred['model_accuracy']}%</b> | "
+                                    f"Trained on "
+                                    f"<b>{_pred['n_trained']}</b> candles"
+                                    f"</div>",
+                                    unsafe_allow_html=True
+                                )
+
+                                # Agreement check
+                                scan_dir = r["Direction"]
+                                ml_dir   = _pred["prediction"]
+                                if scan_dir == "UPTREND" and ml_dir == "UPTREND":
+                                    st.success(
+                                        "🔥 Scanner + ML both agree BULLISH — "
+                                        "highest confidence CE setup!"
+                                    )
+                                elif scan_dir == "DOWNTREND" and ml_dir == "DOWNTREND":
+                                    st.error(
+                                        "🔥 Scanner + ML both agree BEARISH — "
+                                        "highest confidence PE setup!"
+                                    )
+                                else:
+                                    st.warning(
+                                        f"⚠️ Scanner says {scan_dir} but "
+                                        f"ML says {ml_dir}. "
+                                        "Wait for both to agree."
+                                    )
+                            else:
+                                st.info(
+                                    "ML needs 100+ daily candles. "
+                                    "Not enough data for this stock."
+                                )
+
+                            # Live bias from real-time approximation
+                            if _rt and _rt.get("ok"):
+                                st.markdown("---")
+                                bc_rt = _rt["bias_color"]
+                                st.markdown(
+                                    f"<div style='background:#f8fafc;"
+                                    f"border-radius:8px;padding:10px 14px'>"
+                                    f"<div style='font-size:11px;color:#64748b;"
+                                    f"text-transform:uppercase;letter-spacing:1px'>"
+                                    f"Live Approximation</div>"
+                                    f"<div style='font-size:20px;font-weight:700;"
+                                    f"color:{bc_rt};margin:4px 0'>"
+                                    f"{_rt['live_bias']}</div>"
+                                    f"<div style='font-size:12px;color:#64748b'>"
+                                    f"RSI: {_rt['rsi_live']} | "
+                                    f"Since last candle: "
+                                    f"{_rt['since_close']:+.2f}% | "
+                                    f"Micro: {_rt['micro_trend']}"
+                                    f"</div></div>",
+                                    unsafe_allow_html=True
+                                )
+                            st.markdown("</div>", unsafe_allow_html=True)
+
+                        # ── MINI CHART ─────────────────────────────
+                        if _df is not None and len(_df) >= 30:
+                            st.markdown(
+                                f"#### 🕯️ {_name} — {scan_tf} chart"
+                            )
+                            plot_mini = _df.tail(60).copy()
+                            fig_mini  = make_subplots(
+                                rows=2, cols=1,
+                                shared_xaxes=True,
+                                row_heights=[0.75, 0.25],
+                                vertical_spacing=0.03
+                            )
+                            # Candles
+                            fig_mini.add_trace(go.Candlestick(
+                                x=plot_mini.index,
+                                open=plot_mini["Open"],
+                                high=plot_mini["High"],
+                                low=plot_mini["Low"],
+                                close=plot_mini["Close"],
+                                name="Price",
+                                increasing_line_color="#16a34a",
+                                decreasing_line_color="#dc2626",
+                            ), row=1, col=1)
+
+                            # EMAs
+                            if _sig:
+                                for ser, col_, nm in [
+                                    (_sig["e9s"],   "#f59e0b", "EMA9"),
+                                    (_sig["e21s"],  "#ea580c", "EMA21"),
+                                    (_sig["vwaps"], "#64748b", "VWAP"),
+                                ]:
+                                    fig_mini.add_trace(go.Scatter(
+                                        x=plot_mini.index,
+                                        y=ser.tail(60),
+                                        line=dict(color=col_, width=1.5),
+                                        name=nm
+                                    ), row=1, col=1)
+
+                                # CPR lines
+                                for cpr_val, cpr_nm, cpr_cl in [
+                                    (_sig["cpr_tc"],    "TC",    "#f59e0b"),
+                                    (_sig["cpr_pivot"], "Pivot", "#f59e0b"),
+                                    (_sig["cpr_bc"],    "BC",    "#f59e0b"),
+                                ]:
+                                    fig_mini.add_hline(
+                                        y=cpr_val,
+                                        line_dash="dot",
+                                        line_color=cpr_cl,
+                                        line_width=1,
+                                        opacity=0.7,
+                                        annotation_text=cpr_nm,
+                                        row=1, col=1
+                                    )
+
+                                # SL line
+                                sl_plot = (
+                                    _sig["sl_long"]
+                                    if r["Direction"] == "UPTREND"
+                                    else _sig["sl_short"]
+                                )
+                                fig_mini.add_hline(
+                                    y=sl_plot,
+                                    line_dash="dash",
+                                    line_color="#dc2626",
+                                    line_width=1.5,
+                                    opacity=0.8,
+                                    annotation_text=f"SL ₹{sl_plot:,}",
+                                    row=1, col=1
+                                )
+
+                            # Volume
+                            vc = [
+                                "#16a34a"
+                                if float(plot_mini["Close"].iloc[i]) >=
+                                   float(plot_mini["Open"].iloc[i])
+                                else "#dc2626"
+                                for i in range(len(plot_mini))
+                            ]
+                            fig_mini.add_trace(go.Bar(
+                                x=plot_mini.index,
+                                y=plot_mini["Volume"],
+                                marker_color=vc,
+                                name="Vol", opacity=0.7
+                            ), row=2, col=1)
+
+                            fig_mini.update_layout(
+                                template="plotly_white",
+                                height=420,
+                                xaxis_rangeslider_visible=False,
+                                margin=dict(l=10,r=10,t=20,b=10),
+                                legend=dict(
+                                    orientation="h", y=1.02,
+                                    font=dict(size=10)
+                                ),
+                            )
+                            st.plotly_chart(
+                                fig_mini, use_container_width=True
+                            )
+
+                st.markdown(
+                    "<div style='margin:4px 0'></div>",
+                    unsafe_allow_html=True
+                )
 
         # ── Good signals ───────────────────────────────────
         if good_r:

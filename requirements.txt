@@ -8,3 +8,6 @@ requests
 scipy
 pytz
 scikit-learn
+openpyxl
+kiteconnect
+python-dotenv

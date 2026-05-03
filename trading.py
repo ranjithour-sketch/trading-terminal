@@ -223,10 +223,15 @@ html, body, .stApp, [class*="css"] {
 
 /* ── Mobile-first layout ──────────────────────────── */
 .block-container {
-    padding-top: 0.5rem !important;
+    padding-top: 1rem !important;
     padding-left: 1rem !important;
     padding-right: 1rem !important;
     max-width: 1400px !important;
+}
+/* Hide Streamlit deploy button area interference */
+[data-testid="stToolbar"] {
+    right: 1rem !important;
+    top: 0.3rem !important;
 }
 
 /* Streamlit header - make transparent on all devices */
@@ -407,6 +412,17 @@ section[data-testid="stSidebar"] h3 {
     margin: 12px 0 6px !important;
     text-transform: uppercase !important;
     letter-spacing: 0.5px !important;
+}
+/* Fix label text corruption in sidebar */
+section[data-testid="stSidebar"] label {
+    font-size: 12px !important;
+    color: #374151 !important;
+    font-weight: 500 !important;
+}
+section[data-testid="stSidebar"] .stTextInput label,
+section[data-testid="stSidebar"] .stSelectbox label,
+section[data-testid="stSidebar"] .stCheckbox label {
+    display: none !important;
 }
 section[data-testid="stSidebar"] p {
     font-size: 12px !important;
@@ -2138,7 +2154,7 @@ if KITE_AVAILABLE and KITE_API_KEY:
             "Zerodha will redirect back automatically."
         )
         # Show redirect URL hint
-        with st.sidebar.expander("⚙️ Setup help"):
+        with st.sidebar.expander("Setup help"):
             st.markdown(
                 "**Kite Redirect URL must be set to:**\n\n"
                 "For local use:\n"
@@ -2153,9 +2169,14 @@ else:
 st.sidebar.markdown("---")
 
 # Stock search
+st.sidebar.markdown(
+    "<div style='font-size:12px;font-weight:600;color:#374151;margin-bottom:4px'>Search stock</div>",
+    unsafe_allow_html=True
+)
 srch = st.sidebar.text_input(
-    "🔍 Search stock",
-    placeholder="e.g. Reliance, TCS, HDFC..."
+    "Search",
+    placeholder="e.g. Reliance, TCS, HDFC...",
+    label_visibility="collapsed"
 )
 if srch:
     q    = srch.strip().lower()
@@ -2218,10 +2239,10 @@ for ni, nm in enumerate(SIDEBAR_PICKS[sidebar_sector]):
 
 st.sidebar.markdown("---")
 tf = st.sidebar.selectbox(
-    "⏱ Timeframe",
+    "Timeframe",
     ["1m","5m","15m","30m","1h","1d"], index=2)
 
-auto_rf = st.sidebar.toggle("🔄 Auto Refresh (2 min)",False)
+auto_rf = st.sidebar.checkbox("Auto Refresh (2 min)", False)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Open in new window**")
@@ -2426,154 +2447,6 @@ with T1:
         tbl["Change ₹"] = tbl["Change ₹"].apply(
             lambda x: f"{x:+.2f}")
         st.dataframe(tbl, width="stretch", hide_index=True)
-
-with T1:
-    st.markdown("### 📋 Live Stock Prices")
-    wc1,wc2,wc3 = st.columns([2,1,1])
-    with wc1:
-        wsec = st.selectbox("Sector",list(SECTORS.keys()),
-                            key="wsec")
-    with wc2:
-        if st.button("🔄 Refresh",type="primary",key="wrf"):
-            st.cache_data.clear()
-    with wc3:
-        showall = st.checkbox("All stocks")
-
-    slist = list(STOCKS.keys()) if showall else SECTORS[wsec]
-    with st.spinner("Fetching live prices..."):
-        pdf = bulk_prices(slist)
-
-    if pdf.empty:
-        st.error("Could not fetch. Check internet.")
-    else:
-        valid = pdf[pdf["Price"].notna()].copy()
-
-        # ── Grid of cards ─────────────────────────────────
-        n_cols = 4
-        btn_idx = 0
-        for chunk_start in range(0,len(valid),n_cols):
-            chunk = valid.iloc[chunk_start:chunk_start+n_cols]
-            cols  = st.columns(n_cols)
-            for ci,(_, row) in enumerate(chunk.iterrows()):
-                chg = row["Chg%"] or 0
-                col = "#00ff88" if chg>=0 else "#ff4455"
-                arr = "▲" if chg>=0 else "▼"
-                with cols[ci]:
-                    if st.button(
-                        f"**{row['Name']}**\n"
-                        f"₹{row['Price']:,.2f}  "
-                        f"{arr}{abs(chg):.2f}%",
-                        key=f"wla_{btn_idx}",
-                        width="stretch"):
-                        st.session_state["sn"] = row["Name"]
-                        st.session_state["st"] = row["Sym"]
-                        st.rerun()
-                btn_idx += 1
-
-        # ── Full table ────────────────────────────────────
-        st.markdown("---")
-        tbl = valid[["Name","Price","Chg%","Chg₹",
-                     "High","Low"]].copy()
-        tbl.columns = ["Stock","Price ₹","Change %",
-                       "Change ₹","Day High","Day Low"]
-        tbl["Price ₹"]  = tbl["Price ₹"].apply(
-            lambda x: f"₹{x:,.2f}")
-        tbl["Day High"] = tbl["Day High"].apply(
-            lambda x: f"₹{x:,.2f}")
-        tbl["Day Low"]  = tbl["Day Low"].apply(
-            lambda x: f"₹{x:,.2f}")
-        tbl["Change %"] = tbl["Change %"].apply(
-            lambda x: f"{x:+.2f}%")
-        tbl["Change ₹"] = tbl["Change ₹"].apply(
-            lambda x: f"{x:+.2f}")
-        st.dataframe(tbl, width="stretch", hide_index=True)
-
-    # ── Commodity Market Overview ─────────────────────────
-    st.markdown("---")
-    st.markdown("### 🏭 Commodity & Global Markets")
-    st.caption(
-        "MCX commodities, currency rates and global indices. "
-        "Prices from international futures markets."
-    )
-
-    COMMODITY_GROUPS = {
-        "🥇 Precious Metals": [
-            ("Gold",         "GC=F"),
-            ("Silver",       "SI=F"),
-            ("Gold ETF NSE", "GOLDBEES.NS"),
-        ],
-        "🛢️ Energy": [
-            ("Crude WTI",    "CL=F"),
-            ("Brent Crude",  "BZ=F"),
-            ("Natural Gas",  "NG=F"),
-        ],
-        "⚙️ Base Metals": [
-            ("Copper",       "HG=F"),
-            ("Aluminium",    "ALI=F"),
-            ("Nickel",       "NI=F"),
-            ("Zinc",         "ZNC=F"),
-        ],
-        "💱 Currency / INR": [
-            ("USD/INR",      "USDINR=X"),
-            ("EUR/INR",      "EURINR=X"),
-            ("GBP/INR",      "GBPINR=X"),
-            ("JPY/INR",      "JPYINR=X"),
-        ],
-        "🌍 Global Indices": [
-            ("Dow Jones",    "^DJI"),
-            ("S&P 500",      "^GSPC"),
-            ("NASDAQ",       "^IXIC"),
-            ("Nikkei",       "^N225"),
-            ("Hang Seng",    "^HSI"),
-        ],
-    }
-
-    for grp_name, grp_items in COMMODITY_GROUPS.items():
-        st.markdown(
-            f"<div style='font-size:13px;font-weight:700;"
-            f"color:#374151;margin:12px 0 6px'>"
-            f"{grp_name}</div>",
-            unsafe_allow_html=True
-        )
-        cm_cols = st.columns(len(grp_items))
-        for ci, (cm_name, cm_sym) in enumerate(grp_items):
-            cm_lp = live_price(cm_sym)
-            with cm_cols[ci]:
-                if cm_lp["ok"] and cm_lp["p"] > 0:
-                    cm_col = ("#16a34a"
-                              if cm_lp["chg"] >= 0
-                              else "#dc2626")
-                    cm_arr = "▲" if cm_lp["chg"] >= 0 else "▼"
-                    st.markdown(
-                        f"<div style='background:#ffffff;"
-                        f"border:1px solid #e2e8f0;"
-                        f"border-radius:10px;padding:10px 8px;"
-                        f"text-align:center;"
-                        f"box-shadow:0 1px 3px rgba(0,0,0,0.04)'>"
-                        f"<div style='font-size:10px;color:#64748b;"
-                        f"font-weight:500;margin-bottom:3px'>"
-                        f"{cm_name}</div>"
-                        f"<div style='font-size:15px;font-weight:700;"
-                        f"color:#1e293b'>"
-                        f"{cm_lp['p']:,.2f}</div>"
-                        f"<div style='font-size:11px;"
-                        f"color:{cm_col};font-weight:600'>"
-                        f"{cm_arr}{abs(cm_lp['chg']):.2f}%"
-                        f"</div></div>",
-                        unsafe_allow_html=True
-                    )
-                else:
-                    st.markdown(
-                        f"<div style='background:#f8fafc;"
-                        f"border:1px solid #e2e8f0;"
-                        f"border-radius:10px;padding:10px 8px;"
-                        f"text-align:center'>"
-                        f"<div style='font-size:10px;color:#94a3b8'>"
-                        f"{cm_name}</div>"
-                        f"<div style='color:#cbd5e1'>—</div>"
-                        f"</div>",
-                        unsafe_allow_html=True
-                    )
 
 # ╔══════════════════════════════════════════════════════╗
 # ║  TAB 2 — TRADE SETUP                                ║

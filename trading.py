@@ -229,44 +229,23 @@ html, body, .stApp, [class*="css"] {
     max-width: 1400px !important;
 }
 
-/* Streamlit top header — make fully transparent so our
-   blue gradient header shows cleanly underneath */
+/* Streamlit header — transparent, no height, no click blocking */
 header[data-testid="stHeader"] {
     background: transparent !important;
     border-bottom: none !important;
     box-shadow: none !important;
-    height: 0 !important;
-    min-height: 0 !important;
-    overflow: visible !important;
+    pointer-events: none !important;
 }
 
-/* Toolbar (Deploy, Stop, settings) — float top right
-   without covering our header */
+/* Toolbar — allow clicks through */
 [data-testid="stToolbar"] {
-    position: fixed !important;
-    top: 0 !important;
-    right: 0 !important;
-    z-index: 9999 !important;
-    background: transparent !important;
-    padding: 4px 8px !important;
-}
-[data-testid="stToolbar"] * {
-    color: #ffffff !important;
-    fill: #ffffff !important;
+    pointer-events: all !important;
+    z-index: 999 !important;
 }
 
-/* Remove any top margin that pushes content down */
+/* Main content area */
 .main .block-container {
     padding-top: 0.5rem !important;
-    margin-top: 0 !important;
-}
-
-/* App view container — no top gap */
-[data-testid="stAppViewContainer"] {
-    padding-top: 0 !important;
-}
-.appview-container .main {
-    padding-top: 0 !important;
 }
 
 /* ── Mobile responsive — comprehensive fix ──────── */
@@ -2106,15 +2085,25 @@ st.markdown("<div style='margin:6px 0'></div>",
             unsafe_allow_html=True)
 
 # ── Open in new window panel ───────────────────────────────
-with st.expander("🔗 Open any tab in a separate browser window"):
+# Auto-detect base URL (before expander)
+import socket as _socket
+try:
+    _hn = _socket.gethostname()
+    _is_local = (_hn.startswith("DESKTOP") or
+                 _hn.startswith("LAPTOP") or
+                 "ranjith" in _hn.lower() or
+                 _hn == "localhost")
+except:
+    _is_local = False
+
+_base = ("http://localhost:8501" if _is_local
+         else "https://ranjithour-sketch-trading-terminal-trading.streamlit.app")
+
+with st.expander("Open any tab in a separate browser window"):
     st.caption(
         "Click any link below to open that tab in a new browser "
-        "window. You can have multiple tabs open side by side — "
-        "e.g. Trade Setup in one window and Scanner in another."
+        "window. You can have multiple tabs open side by side."
     )
-    # Get the current base URL
-    _base = "http://localhost:8501"
-
     link_cols = st.columns(5)
     link_data = [
         ("📋 Watchlist",     "watchlist", "#3b82f6"),
@@ -2315,7 +2304,7 @@ auto_rf = st.sidebar.checkbox("Auto Refresh (2 min)", False)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("<b>Open in new window</b>", unsafe_allow_html=True)
-_base_url = "http://localhost:8501"
+_base_url = _base
 for _lname, _lkey in [
     ("📋 Watchlist",    "watchlist"),
     ("🎯 Trade Setup",  "setup"),

@@ -1547,6 +1547,25 @@ def live_price(sym: str) -> dict:
                     "source":"yahoo"}
     return _yahoo_price(sym)
 
+@st.cache_data(ttl=3600)
+def get_kite_instruments() -> dict:
+    """
+    Cache NSE instruments list for 1 hour.
+    Avoids fetching full list on every candle request.
+    Returns dict: {tradingsymbol: instrument_token}
+    """
+    kite = get_kite()
+    if not kite:
+        return {}
+    try:
+        instruments = kite.instruments("NSE")
+        return {
+            inst["tradingsymbol"]: inst["instrument_token"]
+            for inst in instruments
+        }
+    except:
+        return {}
+
 def candles(sym: str, interval: str) -> pd.DataFrame:
     """
     Fetch OHLCV candles — Kite if connected (real-time),
@@ -1556,8 +1575,7 @@ def candles(sym: str, interval: str) -> pd.DataFrame:
     kite = get_kite()
     if kite and not sym.startswith("^"):
         try:
-            nse_sym   = sym.replace(".NS","").replace(".BO","")
-            exchange  = "BSE" if ".BO" in sym else "NSE"
+            nse_sym = sym.replace(".NS","").replace(".BO","")
 
             # Kite interval mapping
             kite_interval = {
@@ -1571,24 +1589,17 @@ def candles(sym: str, interval: str) -> pd.DataFrame:
 
             # Date range
             days_ = {
-                "minute":180,"5minute":100,
-                "15minute":200,"30minute":200,
-                "60minute":400,"day":2000
-            }.get(kite_interval, 200)
+                "minute":2,"5minute":20,
+                "15minute":60,"30minute":60,
+                "60minute":200,"day":2000
+            }.get(kite_interval, 60)
 
             from_dt = datetime.now() - timedelta(days=days_)
             to_dt   = datetime.now()
 
-            inst_token = None
-            try:
-                # Get instrument token
-                instruments = kite.instruments("NSE")
-                for inst in instruments:
-                    if inst["tradingsymbol"] == nse_sym:
-                        inst_token = inst["instrument_token"]
-                        break
-            except:
-                pass
+            # Use cached instruments lookup
+            instruments_map = get_kite_instruments()
+            inst_token = instruments_map.get(nse_sym)
 
             if inst_token:
                 hist = kite.historical_data(
@@ -2784,20 +2795,24 @@ with T2:
     st.markdown("---")
 
     # ── Live price card ───────────────────────────────────
-    # Force clear cache to get freshest data
-    _lp_fresh = live_price(stick)
-    lp = _lp_fresh
+    lp = live_price(stick)
 
-    # Show data freshness note
+    # Show data source indicator
+    _kite_on = kite_is_connected()
+    _src_col  = "#f0fdf4" if _kite_on else "#fffbeb"
+    _src_bdr  = "#86efac" if _kite_on else "#fcd34d"
+    _src_txt  = "#166534" if _kite_on else "#92400e"
+    _src_msg  = (
+        "⚡ <b>Kite LIVE</b> — Real-time candles active. "
+        "All signals are based on live data."
+        if _kite_on else
+        "📊 <b>Yahoo Finance</b> — Chart candles have ~15 min delay. "
+        "Login with Kite in sidebar for live signals."
+    )
     st.markdown(
-        "<div style='background:#fffbeb;border:1px solid #fcd34d;"
-        "border-radius:8px;padding:6px 14px;margin-bottom:8px;"
-        "font-size:12px;color:#92400e;display:flex;"
-        "justify-content:space-between;align-items:center'>"
-        "<span>⚡ <b>Live price</b> refreshes every 15 seconds via Yahoo Finance</span>"
-        "<span>📊 <b>Chart candles</b> have ~15 min delay (Yahoo Finance limitation) — "
-        "Real-time approximation bridges this gap</span>"
-        "</div>",
+        f"<div style='background:{_src_col};border:1px solid {_src_bdr};"
+        f"border-radius:8px;padding:8px 14px;margin-bottom:8px;"
+        f"font-size:12px;color:{_src_txt}'>{_src_msg}</div>",
         unsafe_allow_html=True
     )
     if lp["ok"]:
@@ -4169,6 +4184,16 @@ with T3:
             elif sc_search:
                 st.caption("No results found")
 
+    _kite_scan = kite_is_connected()
+    if _kite_scan:
+        st.success(
+            "⚡ Kite LIVE connected — Scanner using real-time candles"
+        )
+    else:
+        st.warning(
+            "📊 Yahoo Finance data (15-min delay) — "
+            "Login with Zerodha Kite in sidebar for live scanner signals"
+        )
     st.caption(
         "Scans stocks simultaneously across sectors. "
         "Click Scan, review results, then manually send signals to Telegram."

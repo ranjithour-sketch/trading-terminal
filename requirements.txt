@@ -11,3 +11,4 @@ scikit-learn
 openpyxl
 kiteconnect
 python-dotenv
+nsepython

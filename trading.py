@@ -186,6 +186,9 @@ TAB_ROUTES = {
     "smart":     4,
     "calc":      5,
     "news":      6,
+    "pulse":     7,
+    "options":   8,
+    "backtest":  9,
 }
 TAB_NAMES = [
     "📋 Watchlist",
@@ -195,14 +198,142 @@ TAB_NAMES = [
     "🏦 Smart Money",
     "🧮 P&L Calculator",
     "📰 News & Events",
+    "📊 Market Pulse",
+    "🔗 Options Chain",
+    "🧪 Backtest",
 ]
-TAB_ICONS = ["📋","🎯","🔍","🤖","🏦","🧮","📰"]
+TAB_ICONS = ["📋","🎯","🔍","🤖","🏦","🧮","📰","📊","🔗","🧪"]
 TAB_KEYS  = list(TAB_ROUTES.keys())
 
 # Read current tab from URL
 _qp = st.query_params
 _tab_key = _qp.get("tab", "watchlist")
 _default_tab = TAB_ROUTES.get(_tab_key, 0)
+
+# ══════════════════════════════════════════════════════════
+# MARKET DATA HELPERS
+# ══════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=300)
+def get_india_vix() -> dict:
+    """Get India VIX from Yahoo Finance."""
+    try:
+        vix_tk = yf.Ticker("^INDIAVIX")
+        fi = vix_tk.fast_info
+        p  = float(fi.last_price)
+        pc = float(fi.previous_close) if fi.previous_close else p
+        ch = round(((p-pc)/pc)*100, 2) if pc else 0
+        level = (
+            "🔴 EXTREME FEAR" if p > 25 else
+            "🟠 HIGH FEAR"    if p > 20 else
+            "🟡 ELEVATED"     if p > 15 else
+            "🟢 CALM"         if p > 10 else
+            "🟢 VERY CALM"
+        )
+        advice = (
+            "Avoid buying options — premiums very expensive"
+            if p > 20 else
+            "Good time to buy CE/PE — premiums reasonable"
+            if p < 15 else
+            "Moderate conditions — trade carefully"
+        )
+        return {
+            "ok": True, "vix": round(p, 2),
+            "prev": round(pc, 2), "chg": ch,
+            "level": level, "advice": advice
+        }
+    except Exception as e:
+        return {"ok": False, "vix": 0, "level": "Unknown",
+                "advice": "VIX data unavailable", "chg": 0}
+
+@st.cache_data(ttl=600)
+def get_fii_dii() -> dict:
+    """Get FII/DII data from NSE website."""
+    try:
+        session_ = requests.Session()
+        hdrs = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Accept": "application/json",
+            "Referer": "https://www.nseindia.com/"
+        }
+        session_.get("https://www.nseindia.com", headers=hdrs, timeout=8)
+        r = session_.get(
+            "https://www.nseindia.com/api/fiidiiTradeReact",
+            headers=hdrs, timeout=8
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if data:
+                latest = data[0]
+                fii_buy  = float(latest.get("fiiBuy", 0) or 0)
+                fii_sell = float(latest.get("fiiSell", 0) or 0)
+                dii_buy  = float(latest.get("diiBuy", 0) or 0)
+                dii_sell = float(latest.get("diiSell", 0) or 0)
+                fii_net  = round(fii_buy - fii_sell, 2)
+                dii_net  = round(dii_buy - dii_sell, 2)
+                return {
+                    "ok": True,
+                    "date":     latest.get("date", ""),
+                    "fii_buy":  fii_buy,
+                    "fii_sell": fii_sell,
+                    "fii_net":  fii_net,
+                    "dii_buy":  dii_buy,
+                    "dii_sell": dii_sell,
+                    "dii_net":  dii_net,
+                    "data":     data[:10]
+                }
+        return {"ok": False}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@st.cache_data(ttl=180)
+def get_options_chain(symbol: str = "NIFTY") -> dict:
+    """Get options chain from NSE."""
+    try:
+        session_ = requests.Session()
+        hdrs = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Accept": "application/json",
+            "Referer": "https://www.nseindia.com/"
+        }
+        session_.get("https://www.nseindia.com", headers=hdrs, timeout=8)
+        url = (f"https://www.nseindia.com/api/option-chain-indices"
+               f"?symbol={symbol}")
+        r = session_.get(url, headers=hdrs, timeout=8)
+        if r.status_code == 200:
+            data = r.json()
+            records = data.get("records", {})
+            exp_dates = records.get("expiryDates", [])
+            spot = float(records.get("underlyingValue", 0))
+            oc_data = records.get("data", [])
+            return {
+                "ok": True,
+                "spot": spot,
+                "expiries": exp_dates,
+                "data": oc_data,
+                "timestamp": records.get("timestamp", "")
+            }
+        return {"ok": False}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@st.cache_data(ttl=3600)
+def get_nifty_history_for_backtest(months: int = 6) -> pd.DataFrame:
+    """Get historical data for backtesting."""
+    try:
+        end   = datetime.now()
+        start = end - timedelta(days=months*30)
+        df = yf.download(
+            "^NSEI", start=start, end=end,
+            interval="1d", progress=False,
+            auto_adjust=True
+        )
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df.dropna(inplace=True)
+        return df
+    except:
+        return pd.DataFrame()
 
 # ══════════════════════════════════════════════════════════
 # CSS
@@ -1709,6 +1840,110 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
             float(h.iloc[-1]) >= cpr_bc
         )
 
+        # ── Supertrend Indicator ─────────────────────────
+        # Supertrend = ATR-based trend following indicator
+        # Period=7, Multiplier=3 (standard settings)
+        st_period = 7
+        st_mult   = 3.0
+        try:
+            st_atr = ta.volatility.AverageTrueRange(
+                h, l, c, window=st_period
+            ).average_true_range()
+
+            hl2 = (h + l) / 2
+            upper_band = hl2 + (st_mult * st_atr)
+            lower_band = hl2 - (st_mult * st_atr)
+
+            # Calculate Supertrend
+            st_vals  = [0.0] * len(c)
+            st_trend = [1]   * len(c)  # 1=uptrend, -1=downtrend
+
+            for idx in range(1, len(c)):
+                # Upper band
+                if (upper_band.iloc[idx] < upper_band.iloc[idx-1] or
+                        float(c.iloc[idx-1]) > upper_band.iloc[idx-1]):
+                    ub = float(upper_band.iloc[idx])
+                else:
+                    ub = float(upper_band.iloc[idx-1])
+
+                # Lower band
+                if (lower_band.iloc[idx] > lower_band.iloc[idx-1] or
+                        float(c.iloc[idx-1]) < lower_band.iloc[idx-1]):
+                    lb = float(lower_band.iloc[idx])
+                else:
+                    lb = float(lower_band.iloc[idx-1])
+
+                # Trend direction
+                if st_trend[idx-1] == -1:
+                    if float(c.iloc[idx]) > ub:
+                        st_trend[idx] = 1
+                        st_vals[idx]  = lb
+                    else:
+                        st_trend[idx] = -1
+                        st_vals[idx]  = ub
+                else:
+                    if float(c.iloc[idx]) < lb:
+                        st_trend[idx] = -1
+                        st_vals[idx]  = ub
+                    else:
+                        st_trend[idx] = 1
+                        st_vals[idx]  = lb
+
+            st_value    = round(st_vals[-1], 2)
+            st_dir      = st_trend[-1]   # 1=buy, -1=sell
+            st_bull     = st_dir == 1
+            st_crossed  = st_trend[-1] != st_trend[-2]  # fresh crossover
+            st_signal   = ("BUY" if st_bull else "SELL")
+            st_label    = (f"Supertrend BUY ₹{st_value:,.2f}"
+                           if st_bull
+                           else f"Supertrend SELL ₹{st_value:,.2f}")
+        except Exception:
+            st_value   = 0.0
+            st_bull    = cp > float(c.mean())
+            st_crossed = False
+            st_signal  = "BUY" if st_bull else "SELL"
+            st_label   = st_signal
+            st_dir     = 1 if st_bull else -1
+
+        # ── Fibonacci Retracement Levels ──────────────────
+        # Calculate from recent swing high and swing low (last 50 candles)
+        fib_period = min(50, len(c))
+        fib_high   = float(h.tail(fib_period).max())
+        fib_low    = float(l.tail(fib_period).min())
+        fib_range  = fib_high - fib_low
+
+        # Key Fibonacci levels
+        fib_236 = round(fib_high - 0.236 * fib_range, 2)
+        fib_382 = round(fib_high - 0.382 * fib_range, 2)
+        fib_500 = round(fib_high - 0.500 * fib_range, 2)
+        fib_618 = round(fib_high - 0.618 * fib_range, 2)
+        fib_786 = round(fib_high - 0.786 * fib_range, 2)
+
+        # Find nearest Fibonacci level to current price
+        fib_levels = {
+            "23.6%": fib_236,
+            "38.2%": fib_382,
+            "50.0%": fib_500,
+            "61.8%": fib_618,
+            "78.6%": fib_786,
+        }
+        nearest_fib = min(
+            fib_levels.items(),
+            key=lambda x: abs(x[1] - cp)
+        )
+        fib_nearest_name = nearest_fib[0]
+        fib_nearest_val  = nearest_fib[1]
+        fib_distance_pct = round(
+            abs(cp - fib_nearest_val) / cp * 100, 2
+        )
+
+        # Is price near a key Fibonacci level (within 0.5%)?
+        near_fib = fib_distance_pct < 0.5
+        # Is price bouncing from Fibonacci support?
+        fib_support = (near_fib and
+                       cp > fib_nearest_val and
+                       float(l.iloc[-1]) <= fib_nearest_val * 1.005)
+
         # Support / Resistance
         window = 5
         s_lvls, r_lvls = [], []
@@ -1882,6 +2117,11 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
              cpr_position == "ABOVE",
              f"{cpr_bias} | {cpr_type[:8]}",
              "Central Pivot Range bias must be bullish"),
+            ("9c. Supertrend BUY signal",
+             st_bull,
+             f"{st_signal} ₹{st_value:,.0f}"
+             + (" FRESH!" if st_crossed else ""),
+             "Supertrend must be in BUY zone"),
             ("10. No Bearish Pattern",
              not any(p[1]=="bearish" for p in patterns),
              ", ".join(p[0] for p in patterns) or "None",
@@ -1934,6 +2174,11 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
              cpr_position == "ABOVE",
              f"{cpr_bias} | {cpr_type[:8]}",
              "Central Pivot Range bias must be bullish"),
+            ("9c. Supertrend BUY signal",
+             st_bull,
+             f"{st_signal} ₹{st_value:,.0f}"
+             + (" FRESH!" if st_crossed else ""),
+             "Supertrend must be in BUY zone"),
             ("10. No Bullish Pattern",
              not any(p[1]=="bullish" for p in patterns),
              ", ".join(p[0] for p in patterns) or "None",
@@ -1971,6 +2216,18 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
             cpr_width=cpr_width, cpr_width_pct=cpr_width_pct,
             cpr_type=cpr_type, cpr_bias=cpr_bias,
             cpr_position=cpr_position, virgin_cpr=virgin_cpr,
+            # Supertrend
+            st_value=st_value, st_bull=st_bull,
+            st_crossed=st_crossed, st_signal=st_signal,
+            st_label=st_label, st_dir=st_dir,
+            # Fibonacci
+            fib_high=fib_high, fib_low=fib_low,
+            fib_236=fib_236, fib_382=fib_382,
+            fib_500=fib_500, fib_618=fib_618, fib_786=fib_786,
+            fib_nearest_name=fib_nearest_name,
+            fib_nearest_val=fib_nearest_val,
+            fib_distance_pct=fib_distance_pct,
+            near_fib=near_fib, fib_support=fib_support,
             # series
             e9s=e9, e21s=e21, e50s=e50,
             vwaps=vwap, rsis=rsi,
@@ -2106,13 +2363,16 @@ with st.expander("Open any tab in a separate browser window"):
     )
     link_cols = st.columns(5)
     link_data = [
-        ("📋 Watchlist",     "watchlist", "#3b82f6"),
-        ("🎯 Trade Setup",   "setup",     "#16a34a"),
-        ("🔍 Auto Scanner",  "scanner",   "#9333ea"),
-        ("🤖 ML Prediction", "ml",        "#0891b2"),
-        ("🏦 Smart Money",   "smart",     "#d97706"),
-        ("🧮 P&L Calc",      "calc",      "#dc2626"),
-        ("📰 News",          "news",      "#475569"),
+        ("📋 Watchlist",    "watchlist", "#3b82f6"),
+        ("🎯 Trade Setup",  "setup",     "#16a34a"),
+        ("🔍 Scanner",      "scanner",   "#9333ea"),
+        ("🤖 ML",           "ml",        "#0891b2"),
+        ("🏦 Smart Money",  "smart",     "#d97706"),
+        ("🧮 P&L Calc",     "calc",      "#dc2626"),
+        ("📰 News",         "news",      "#475569"),
+        ("📊 Market Pulse", "pulse",     "#0f766e"),
+        ("🔗 Options",      "options",   "#7c3aed"),
+        ("🧪 Backtest",     "backtest",  "#1d4ed8"),
     ]
     for idx, (lname, lkey, lcolor) in enumerate(link_data):
         col_idx = idx % 5
@@ -2364,7 +2624,7 @@ stick = st.session_state["st"]
 # ══════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════
-T1,T2,T3,T4,T5,T6,T7 = st.tabs(TAB_NAMES)
+T1,T2,T3,T4,T5,T6,T7,T8,T9,T10 = st.tabs(TAB_NAMES)
 
 # ── Reusable inline stock search widget ──────────────────
 def inline_stock_search(tab_key: str):
@@ -2670,6 +2930,101 @@ with T2:
         </div>
         """, unsafe_allow_html=True)
 
+    # ── Multi-Timeframe Confirmation ──────────────────────
+    st.markdown("---")
+    st.markdown("### 🕐 Multi-Timeframe Confirmation")
+    st.caption(
+        "Checks 15m, 1h and 1d simultaneously. "
+        "All 3 agreeing = highest confidence trade."
+    )
+
+    mtf_tfs   = [("15m","Intraday"),("1h","Short-term"),("1d","Medium-term")]
+    mtf_cols  = st.columns(3)
+    mtf_results = []
+
+    for (mtf_tf, mtf_label), mtf_col in zip(mtf_tfs, mtf_cols):
+        with st.spinner(f"Loading {mtf_tf}..."):
+            mtf_df  = candles(stick, mtf_tf)
+            mtf_sig = None
+            if mtf_df is not None and len(mtf_df) >= 55:
+                try:
+                    mtf_sig = compute_all(mtf_df, live_price(stick))
+                except:
+                    pass
+
+        mtf_dir = mtf_sig["direction"] if mtf_sig else "UNKNOWN"
+        mtf_results.append(mtf_dir)
+        mtf_col_hex = (
+            "#16a34a" if mtf_dir=="UPTREND"
+            else "#dc2626" if mtf_dir=="DOWNTREND"
+            else "#f59e0b"
+        )
+        mtf_bg = (
+            "#f0fdf4" if mtf_dir=="UPTREND"
+            else "#fef2f2" if mtf_dir=="DOWNTREND"
+            else "#fffbeb"
+        )
+        with mtf_col:
+            if mtf_sig:
+                st.markdown(
+                    f"<div style='background:{mtf_bg};"
+                    f"border:1.5px solid {mtf_col_hex};"
+                    f"border-radius:10px;padding:14px;"
+                    f"text-align:center'>"
+                    f"<div style='font-size:11px;color:#64748b'>"
+                    f"{mtf_tf} — {mtf_label}</div>"
+                    f"<div style='font-size:18px;font-weight:700;"
+                    f"color:{mtf_col_hex};margin:4px 0'>{mtf_dir}</div>"
+                    f"<div style='font-size:12px;color:#475569'>"
+                    f"Score {max(mtf_sig['up_score'],mtf_sig['dn_score'])}/10</div>"
+                    f"<div style='font-size:11px;color:#64748b'>"
+                    f"ST: {'BUY' if mtf_sig['st_bull'] else 'SELL'} | "
+                    f"RSI: {mtf_sig['rv']:.0f}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(
+                    f"<div style='background:#f8fafc;"
+                    f"border:1px solid #e2e8f0;border-radius:10px;"
+                    f"padding:14px;text-align:center'>"
+                    f"<div style='font-size:11px;color:#64748b'>"
+                    f"{mtf_tf}</div>"
+                    f"<div style='color:#94a3b8'>No data</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+    # MTF verdict
+    bull_c = mtf_results.count("UPTREND")
+    bear_c = mtf_results.count("DOWNTREND")
+
+    if bull_c == 3:
+        st.success(
+            "🔥 ALL 3 TIMEFRAMES BULLISH — "
+            "Highest confidence BUY CE setup!"
+        )
+    elif bear_c == 3:
+        st.error(
+            "🔥 ALL 3 TIMEFRAMES BEARISH — "
+            "Highest confidence BUY PE setup!"
+        )
+    elif bull_c == 2:
+        st.warning(
+            "⚡ 2/3 timeframes BULLISH — "
+            "Good CE setup. Wait for 15m to confirm."
+        )
+    elif bear_c == 2:
+        st.warning(
+            "⚡ 2/3 timeframes BEARISH — "
+            "Good PE setup. Wait for 15m to confirm."
+        )
+    else:
+        st.info(
+            "⚠️ Timeframes conflicting — "
+            "mixed signals. Wait for alignment."
+        )
+
     # ── 11-FACTOR CHECKLISTS ───────────────────────────────
     st.markdown("---")
     st.markdown("### ✅ Pre-Trade Checklist")
@@ -2960,6 +3315,39 @@ with T2:
         name="VWAP"
     ), row=1, col=1)
 
+    # Supertrend line on chart
+    if sig and sig["st_value"] > 0:
+        st_color = "#16a34a" if sig["st_bull"] else "#dc2626"
+        st_series = [sig["st_value"]] * len(plot_df)
+        fig.add_trace(go.Scatter(
+            x=plot_df.index,
+            y=st_series,
+            line=dict(color=st_color, width=2, dash="dot"),
+            name=f"Supertrend {sig['st_signal']}",
+            opacity=0.8
+        ), row=1, col=1)
+
+        # Fibonacci levels on chart
+        fib_data = [
+            (sig["fib_236"], "Fib 23.6%", "#94a3b8"),
+            (sig["fib_382"], "Fib 38.2%", "#f59e0b"),
+            (sig["fib_500"], "Fib 50.0%", "#f59e0b"),
+            (sig["fib_618"], "Fib 61.8%", "#ef4444"),
+            (sig["fib_786"], "Fib 78.6%", "#ef4444"),
+        ]
+        for fib_val, fib_name, fib_col in fib_data:
+            if sig["fib_low"] < fib_val < sig["fib_high"]:
+                fig.add_hline(
+                    y=fib_val,
+                    line_dash="dot",
+                    line_color=fib_col,
+                    line_width=1,
+                    opacity=0.5,
+                    annotation_text=fib_name,
+                    annotation_position="right",
+                    row=1, col=1
+                )
+
     # CPR lines on chart
     if sig:
         # CPR TC (top)
@@ -3119,6 +3507,74 @@ with T2:
     kl6.metric("ATR",        f"₹{sig['atrv']:,.1f}")
 
     # CPR section
+    # ── Supertrend Display ────────────────────────────────
+    if sig:
+        st_col = "#16a34a" if sig["st_bull"] else "#dc2626"
+        st_bg  = "#f0fdf4" if sig["st_bull"] else "#fef2f2"
+        st_crossed_badge = (
+            "<span style='background:#f59e0b;color:#fff;"
+            "padding:2px 8px;border-radius:10px;"
+            "font-size:11px;margin-left:8px'>FRESH CROSSOVER</span>"
+            if sig["st_crossed"] else ""
+        )
+        st.markdown(
+            f"<div style='background:{st_bg};border:1.5px solid "
+            f"{st_col};border-radius:10px;padding:12px 18px;"
+            f"margin-bottom:10px;display:flex;"
+            f"justify-content:space-between;align-items:center'>"
+            f"<div>"
+            f"<span style='font-size:13px;font-weight:700;"
+            f"color:{st_col}'>⚡ SUPERTREND — {sig['st_signal']}"
+            f"</span>{st_crossed_badge}</div>"
+            f"<div style='font-size:14px;font-weight:700;"
+            f"color:{st_col}'>₹{sig['st_value']:,.2f}</div>"
+            f"<div style='font-size:12px;color:#64748b'>"
+            f"{'Price above Supertrend — Bullish' if sig['st_bull'] else 'Price below Supertrend — Bearish'}"
+            f"</div></div>",
+            unsafe_allow_html=True
+        )
+
+    # ── Fibonacci Levels ───────────────────────────────────
+    if sig:
+        st.markdown("#### 📐 Fibonacci Retracement Levels")
+        st.caption(
+            f"Swing High ₹{sig['fib_high']:,.2f} → "
+            f"Swing Low ₹{sig['fib_low']:,.2f} "
+            f"| Nearest: {sig['fib_nearest_name']} "
+            f"₹{sig['fib_nearest_val']:,.2f} "
+            f"({sig['fib_distance_pct']:.2f}% away)"
+            + (" ← Price near Fibonacci!" if sig["near_fib"] else "")
+        )
+
+        fc1,fc2,fc3,fc4,fc5 = st.columns(5)
+        fib_display = [
+            (fc1, "23.6%", sig["fib_236"], "#94a3b8", "Weak support"),
+            (fc2, "38.2%", sig["fib_382"], "#f59e0b", "Key support"),
+            (fc3, "50.0%", sig["fib_500"], "#f59e0b", "Mid point"),
+            (fc4, "61.8%", sig["fib_618"], "#ef4444", "Golden ratio"),
+            (fc5, "78.6%", sig["fib_786"], "#ef4444", "Deep support"),
+        ]
+        cur = sig["cp"]
+        for col, label, val, col_hex, desc in fib_display:
+            diff = round(((cur - val) / val) * 100, 2)
+            is_near = abs(diff) < 0.5
+            bg = "#fffbeb" if is_near else "#f8fafc"
+            border = f"2px solid {col_hex}" if is_near else "1px solid #e2e8f0"
+            col.markdown(
+                f"<div style='background:{bg};border:{border};"
+                f"border-radius:8px;padding:10px;text-align:center'>"
+                f"<div style='font-size:11px;color:#64748b'>{label}</div>"
+                f"<div style='font-size:14px;font-weight:700;"
+                f"color:{col_hex}'>₹{val:,.0f}</div>"
+                f"<div style='font-size:10px;color:#94a3b8'>{desc}</div>"
+                f"<div style='font-size:10px;color:"
+                f"{'#16a34a' if diff>=0 else '#dc2626'}'>"
+                f"{diff:+.1f}%</div>"
+                + ('<div style="font-size:9px;color:#f59e0b">◀ NEAR</div>' if is_near else '')
+                + "</div>",
+                unsafe_allow_html=True
+            )
+
     st.markdown("#### 🔄 CPR — Central Pivot Range")
     cpr_col = (
         "#16a34a" if sig["cpr_position"] == "ABOVE"
@@ -6068,6 +6524,783 @@ with T7:
 # ╔══════════════════════════════════════════════════════╗
 # ║  TAB 8 — PAPER TRADING                              ║
 # ╚══════════════════════════════════════════════════════╝
+
+# ╔══════════════════════════════════════════════════════╗
+# ║  TAB 8 — MARKET PULSE                               ║
+# ╚══════════════════════════════════════════════════════╝
+with T8:
+    st.markdown("### 📊 Market Pulse — VIX + FII/DII")
+    st.caption(
+        "India VIX shows market fear. "
+        "FII/DII shows institutional money flow. "
+        "These two together tell you the market mood."
+    )
+
+    # ── India VIX ─────────────────────────────────────────
+    st.markdown("#### ⚡ India VIX — Market Fear Index")
+
+    if st.button("Refresh VIX + FII/DII", key="pulse_refresh",
+                 type="primary"):
+        get_india_vix.clear()
+        get_fii_dii.clear()
+        st.rerun()
+
+    vix_data = get_india_vix()
+
+    if vix_data["ok"]:
+        vix_v = vix_data["vix"]
+        vix_col = (
+            "#dc2626" if vix_v > 25 else
+            "#ea580c" if vix_v > 20 else
+            "#d97706" if vix_v > 15 else
+            "#16a34a"
+        )
+        vix_bg = (
+            "#fef2f2" if vix_v > 25 else
+            "#fff7ed" if vix_v > 20 else
+            "#fffbeb" if vix_v > 15 else
+            "#f0fdf4"
+        )
+
+        vc1, vc2, vc3 = st.columns(3)
+        with vc1:
+            st.markdown(
+                f"<div style='background:{vix_bg};"
+                f"border:2px solid {vix_col};"
+                f"border-radius:14px;padding:20px;"
+                f"text-align:center'>"
+                f"<div style='font-size:12px;color:#64748b;"
+                f"text-transform:uppercase;letter-spacing:1px'>"
+                f"India VIX</div>"
+                f"<div style='font-size:52px;font-weight:700;"
+                f"color:{vix_col};line-height:1'>{vix_v}</div>"
+                f"<div style='font-size:14px;font-weight:700;"
+                f"color:{vix_col};margin-top:4px'>"
+                f"{vix_data['level']}</div>"
+                f"<div style='font-size:12px;color:#64748b;"
+                f"margin-top:4px'>"
+                f"Change: {vix_data['chg']:+.2f}%</div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+        with vc2:
+            st.markdown(
+                f"<div style='background:#f8fafc;"
+                f"border-radius:12px;padding:16px'>"
+                f"<div style='font-size:13px;font-weight:700;"
+                f"color:#374151;margin-bottom:10px'>"
+                f"VIX Levels Guide</div>"
+                f"<div style='font-size:12px;color:#475569;"
+                f"line-height:2'>"
+                f"🟢 Below 12 — Very calm, best for buying<br>"
+                f"🟢 12–15 — Calm, good for CE/PE<br>"
+                f"🟡 15–20 — Elevated, trade carefully<br>"
+                f"🟠 20–25 — High fear, reduce size<br>"
+                f"🔴 Above 25 — Extreme fear, avoid options"
+                f"</div></div>",
+                unsafe_allow_html=True
+            )
+        with vc3:
+            st.markdown(
+                f"<div style='background:#eff6ff;"
+                f"border:1px solid #93c5fd;"
+                f"border-radius:12px;padding:16px'>"
+                f"<div style='font-size:13px;font-weight:700;"
+                f"color:#1d4ed8;margin-bottom:8px'>"
+                f"Today's Advice</div>"
+                f"<div style='font-size:13px;color:#374151'>"
+                f"{vix_data['advice']}</div>"
+                f"<div style='margin-top:12px;font-size:12px;"
+                f"color:#64748b'>"
+                f"High VIX = expensive options = "
+                f"avoid buying<br>"
+                f"Low VIX = cheap options = "
+                f"good time to buy</div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+        # VIX history chart
+        try:
+            vix_hist = yf.download(
+                "^INDIAVIX", period="3mo",
+                interval="1d", progress=False
+            )
+            if not vix_hist.empty:
+                import plotly.graph_objects as go_vix
+                fig_vix = go_vix.Figure()
+                vix_close = vix_hist["Close"].squeeze()
+                fig_vix.add_trace(go_vix.Scatter(
+                    x=vix_hist.index,
+                    y=vix_close,
+                    fill="tozeroy",
+                    line=dict(color="#3b82f6", width=2),
+                    fillcolor="rgba(59,130,246,0.1)",
+                    name="India VIX"
+                ))
+                for lvl, col_, nm in [
+                    (25, "#dc2626", "Extreme Fear"),
+                    (20, "#ea580c", "High Fear"),
+                    (15, "#d97706", "Elevated"),
+                ]:
+                    fig_vix.add_hline(
+                        y=lvl,
+                        line_dash="dash",
+                        line_color=col_,
+                        opacity=0.5,
+                        annotation_text=nm
+                    )
+                fig_vix.update_layout(
+                    template="plotly_white",
+                    height=250,
+                    margin=dict(l=10,r=10,t=20,b=20),
+                    title="India VIX — Last 3 Months",
+                    yaxis_title="VIX"
+                )
+                st.plotly_chart(fig_vix, use_container_width=True)
+        except Exception:
+            pass
+    else:
+        st.warning(
+            "VIX data unavailable. "
+            "Check internet connection or try refreshing."
+        )
+
+    # ── FII / DII Data ─────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 🏦 FII / DII — Institutional Money Flow")
+    st.caption(
+        "FII = Foreign Institutional Investors (foreign funds). "
+        "DII = Domestic Institutional Investors (Indian mutual funds, LIC). "
+        "When FII buys heavily — market usually goes up next session."
+    )
+
+    fii_data = get_fii_dii()
+
+    if fii_data["ok"]:
+        fd1, fd2, fd3, fd4 = st.columns(4)
+        fii_net = fii_data["fii_net"]
+        dii_net = fii_data["dii_net"]
+
+        fd1.metric(
+            "FII Buy",
+            f"₹{fii_data['fii_buy']:,.0f}Cr",
+        )
+        fd2.metric(
+            "FII Sell",
+            f"₹{fii_data['fii_sell']:,.0f}Cr",
+        )
+        fd3.metric(
+            "FII Net",
+            f"₹{fii_net:,.0f}Cr",
+            delta=f"{'Buying' if fii_net>0 else 'Selling'}",
+            delta_color="normal" if fii_net > 0 else "inverse"
+        )
+        fd4.metric(
+            "DII Net",
+            f"₹{dii_net:,.0f}Cr",
+            delta=f"{'Buying' if dii_net>0 else 'Selling'}",
+            delta_color="normal" if dii_net > 0 else "inverse"
+        )
+
+        # Signal interpretation
+        if fii_net > 1000 and dii_net > 0:
+            st.success(
+                f"🔥 Both FII and DII buying — "
+                f"strong bullish signal for tomorrow. "
+                f"FII net: ₹{fii_net:,.0f}Cr | "
+                f"DII net: ₹{dii_net:,.0f}Cr"
+            )
+        elif fii_net > 500:
+            st.success(
+                f"✅ FII buying ₹{fii_net:,.0f}Cr — "
+                f"bullish bias for tomorrow"
+            )
+        elif fii_net < -1000:
+            st.error(
+                f"🔴 FII selling ₹{abs(fii_net):,.0f}Cr — "
+                f"bearish pressure. "
+                f"{'DII countering with buying' if dii_net>0 else 'DII also selling — double bearish'}"
+            )
+        else:
+            st.info(
+                f"FII net: ₹{fii_net:,.0f}Cr | "
+                f"DII net: ₹{dii_net:,.0f}Cr — "
+                f"Neutral flow"
+            )
+
+        # Last 10 days table
+        if fii_data.get("data"):
+            with st.expander("Last 10 days FII/DII data"):
+                rows = []
+                for d in fii_data["data"][:10]:
+                    fb = float(d.get("fiiBuy",0) or 0)
+                    fs = float(d.get("fiiSell",0) or 0)
+                    db = float(d.get("diiBuy",0) or 0)
+                    ds = float(d.get("diiSell",0) or 0)
+                    rows.append({
+                        "Date":     d.get("date",""),
+                        "FII Buy":  f"₹{fb:,.0f}Cr",
+                        "FII Sell": f"₹{fs:,.0f}Cr",
+                        "FII Net":  f"₹{fb-fs:+,.0f}Cr",
+                        "DII Buy":  f"₹{db:,.0f}Cr",
+                        "DII Sell": f"₹{ds:,.0f}Cr",
+                        "DII Net":  f"₹{db-ds:+,.0f}Cr",
+                    })
+                st.dataframe(
+                    pd.DataFrame(rows),
+                    use_container_width=True,
+                    hide_index=True
+                )
+    else:
+        st.warning(
+            "FII/DII data unavailable from NSE. "
+            "NSE website may be blocking automated requests. "
+            "Try during market hours (9 AM - 6 PM IST)."
+        )
+        st.info(
+            "Manual check: Go to **nseindia.com** → "
+            "Market Data → FII/DII Activity"
+        )
+
+
+# ╔══════════════════════════════════════════════════════╗
+# ║  TAB 9 — OPTIONS CHAIN                              ║
+# ╚══════════════════════════════════════════════════════╝
+with T9:
+    st.markdown("### 🔗 Options Chain — NIFTY / BANKNIFTY")
+    st.caption(
+        "Shows all CE and PE strikes with OI, change in OI and IV. "
+        "High Call OI = resistance. High Put OI = support."
+    )
+
+    oc1, oc2 = st.columns([2, 1])
+    with oc1:
+        oc_symbol = st.selectbox(
+            "Index",
+            ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"],
+            key="oc_symbol"
+        )
+    with oc2:
+        if st.button(
+            "Load Options Chain",
+            type="primary",
+            key="oc_load",
+            use_container_width=True
+        ):
+            get_options_chain.clear()
+
+    oc_data = get_options_chain(oc_symbol)
+
+    if oc_data["ok"]:
+        spot = oc_data["spot"]
+        expiries = oc_data["expiries"]
+
+        st.markdown(
+            f"<div style='background:#1e3a5f;color:white;"
+            f"border-radius:10px;padding:10px 18px;"
+            f"font-size:16px;font-weight:700;margin-bottom:12px'>"
+            f"{oc_symbol} Spot: ₹{spot:,.2f}</div>",
+            unsafe_allow_html=True
+        )
+
+        if expiries:
+            sel_exp = st.selectbox(
+                "Expiry",
+                expiries[:5],
+                key="oc_expiry"
+            )
+
+            # Filter data for selected expiry
+            exp_data = [
+                d for d in oc_data["data"]
+                if d.get("expiryDate") == sel_exp
+            ]
+
+            # Calculate ATM strike
+            step = 50 if oc_symbol == "NIFTY" else 100
+            atm = round(spot / step) * step
+
+            # Build chain table
+            rows = []
+            total_call_oi = 0
+            total_put_oi  = 0
+
+            for item in exp_data:
+                strike = item.get("strikePrice", 0)
+                ce = item.get("CE", {})
+                pe = item.get("PE", {})
+                if not ce and not pe:
+                    continue
+
+                ce_oi  = int(ce.get("openInterest", 0) or 0)
+                ce_doi = int(ce.get("changeinOpenInterest", 0) or 0)
+                ce_iv  = round(float(ce.get("impliedVolatility", 0) or 0), 1)
+                ce_ltp = round(float(ce.get("lastPrice", 0) or 0), 2)
+
+                pe_oi  = int(pe.get("openInterest", 0) or 0)
+                pe_doi = int(pe.get("changeinOpenInterest", 0) or 0)
+                pe_iv  = round(float(pe.get("impliedVolatility", 0) or 0), 1)
+                pe_ltp = round(float(pe.get("lastPrice", 0) or 0), 2)
+
+                total_call_oi += ce_oi
+                total_put_oi  += pe_oi
+
+                rows.append({
+                    "CE OI":    ce_oi,
+                    "CE Chg":   ce_doi,
+                    "CE IV":    ce_iv,
+                    "CE LTP":   ce_ltp,
+                    "Strike":   strike,
+                    "ATM":      "◀ ATM" if strike == atm else "",
+                    "PE LTP":   pe_ltp,
+                    "PE IV":    pe_iv,
+                    "PE Chg":   pe_doi,
+                    "PE OI":    pe_oi,
+                })
+
+            if rows:
+                # PCR
+                pcr = round(total_put_oi / (total_call_oi + 1), 2)
+                pcr_signal = (
+                    "🟢 Bullish (PCR > 1.3 = oversold)"
+                    if pcr > 1.3 else
+                    "🔴 Bearish (PCR < 0.7 = overbought)"
+                    if pcr < 0.7 else
+                    "🟡 Neutral"
+                )
+
+                pm1, pm2, pm3 = st.columns(3)
+                pm1.metric("Total Call OI", f"{total_call_oi:,}")
+                pm2.metric("Total Put OI",  f"{total_put_oi:,}")
+                pm3.metric(
+                    "PCR",
+                    f"{pcr}",
+                    delta=pcr_signal,
+                    delta_color="normal" if pcr > 1 else "inverse"
+                )
+
+                # Show chain near ATM (±10 strikes)
+                df_chain = pd.DataFrame(rows)
+                df_chain_near = df_chain[
+                    (df_chain["Strike"] >= atm - step*10) &
+                    (df_chain["Strike"] <= atm + step*10)
+                ].copy()
+
+                # Highlight max OI
+                max_call_oi = df_chain["CE OI"].max()
+                max_put_oi  = df_chain["PE OI"].max()
+
+                st.markdown(
+                    "**Max Call OI** (Resistance): "
+                    f"**{df_chain.loc[df_chain['CE OI'].idxmax(), 'Strike']:,}** "
+                    f"({max_call_oi:,} contracts)  |  "
+                    "**Max Put OI** (Support): "
+                    f"**{df_chain.loc[df_chain['PE OI'].idxmax(), 'Strike']:,}** "
+                    f"({max_put_oi:,} contracts)"
+                )
+
+                st.dataframe(
+                    df_chain_near.set_index("Strike"),
+                    use_container_width=True,
+                    height=500
+                )
+    else:
+        st.warning(
+            "Options chain data unavailable from NSE. "
+            "NSE may be blocking automated requests."
+        )
+        st.info(
+            "While connected to Zerodha Kite, "
+            "options chain loads from live data. "
+            "Login with Kite in the sidebar for live options data."
+        )
+        # Try Yahoo Finance options as fallback
+        st.markdown("#### Yahoo Finance Options (Fallback)")
+        yf_sym = "^NSEI" if oc_symbol=="NIFTY" else "^NSEBANK"
+        try:
+            tk_oc = yf.Ticker(yf_sym)
+            exp_yf = tk_oc.options
+            if exp_yf:
+                sel_yf = st.selectbox(
+                    "Expiry (Yahoo)",
+                    exp_yf[:3],
+                    key="oc_yf_exp"
+                )
+                chain_yf = tk_oc.option_chain(sel_yf)
+                ycol1, ycol2 = st.columns(2)
+                with ycol1:
+                    st.markdown("**Calls**")
+                    st.dataframe(
+                        chain_yf.calls[[
+                            "strike","lastPrice",
+                            "openInterest","impliedVolatility"
+                        ]].head(20),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                with ycol2:
+                    st.markdown("**Puts**")
+                    st.dataframe(
+                        chain_yf.puts[[
+                            "strike","lastPrice",
+                            "openInterest","impliedVolatility"
+                        ]].head(20),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+        except Exception as e:
+            st.caption(f"Yahoo options also unavailable: {e}")
+
+
+# ╔══════════════════════════════════════════════════════╗
+# ║  TAB 10 — BACKTEST                                  ║
+# ╚══════════════════════════════════════════════════════╝
+with T10:
+    st.markdown("### 🧪 Strategy Backtest")
+    st.caption(
+        "Test your signal strategy on historical data. "
+        "See what the win rate and profit would have been "
+        "if you had traded every signal for the past 6 months."
+    )
+
+    # ── Settings ──────────────────────────────────────────
+    bc1, bc2, bc3 = st.columns(3)
+    with bc1:
+        bt_stock = st.text_input(
+            "Stock to backtest",
+            value="NIFTY 50",
+            key="bt_stock"
+        )
+        bt_sym = STOCKS.get(bt_stock, "^NSEI")
+    with bc2:
+        bt_months = st.slider(
+            "Months of history",
+            1, 12, 6,
+            key="bt_months"
+        )
+        bt_tf = st.selectbox(
+            "Timeframe",
+            ["15m","1h","1d"],
+            index=2,
+            key="bt_tf"
+        )
+    with bc3:
+        bt_min_score = st.slider(
+            "Min signal score",
+            5, 10, 7,
+            key="bt_min_score"
+        )
+        bt_capital = st.number_input(
+            "Capital per trade (Rs)",
+            value=10000,
+            step=1000,
+            key="bt_capital"
+        )
+
+    if st.button(
+        "Run Backtest",
+        type="primary",
+        key="bt_run",
+        use_container_width=True
+    ):
+        with st.spinner(
+            f"Running backtest on {bt_stock} "
+            f"({bt_months} months, {bt_tf})..."
+        ):
+            # Fetch historical data
+            days_map = {"15m":30,"1h":60,"1d":bt_months*30}
+            bt_days  = days_map.get(bt_tf, bt_months*30)
+            end_bt   = datetime.now()
+            start_bt = end_bt - timedelta(days=bt_days)
+
+            bt_df = yf.download(
+                bt_sym,
+                start=start_bt,
+                end=end_bt,
+                interval=bt_tf,
+                auto_adjust=True,
+                progress=False
+            )
+            if isinstance(bt_df.columns, pd.MultiIndex):
+                bt_df.columns = bt_df.columns.get_level_values(0)
+            bt_df.dropna(inplace=True)
+
+        if bt_df.empty or len(bt_df) < 100:
+            st.error(
+                f"Not enough data for {bt_stock}. "
+                f"Try 1d timeframe or longer period."
+            )
+        else:
+            # Run signals on rolling windows
+            trades = []
+            window_size = 55
+            step_size   = 5
+
+            prog_bt = st.progress(
+                0, text="Scanning historical signals..."
+            )
+            total_windows = (len(bt_df)-window_size)//step_size
+
+            for wi, start_i in enumerate(
+                range(0, len(bt_df)-window_size, step_size)
+            ):
+                prog_bt.progress(
+                    min(int(wi/total_windows*100), 99),
+                    text=f"Scanning... {wi}/{total_windows}"
+                )
+                window_df = bt_df.iloc[start_i:start_i+window_size]
+                try:
+                    fake_lp = {
+                        "ok": True,
+                        "p": float(window_df["Close"].iloc[-1]),
+                        "chg": 0, "chg_abs": 0,
+                        "high": float(window_df["High"].iloc[-1]),
+                        "low":  float(window_df["Low"].iloc[-1]),
+                        "prev": float(window_df["Close"].iloc[-2])
+                    }
+                    sig_bt = compute_all(window_df, fake_lp)
+                    if sig_bt is None:
+                        continue
+
+                    score = max(
+                        sig_bt["up_score"],
+                        sig_bt["dn_score"]
+                    )
+                    if score < bt_min_score:
+                        continue
+
+                    direction = sig_bt["direction"]
+                    if direction not in ["UPTREND","DOWNTREND"]:
+                        continue
+
+                    entry_price = sig_bt["cp"]
+                    sl = (sig_bt["sl_long"]
+                          if direction=="UPTREND"
+                          else sig_bt["sl_short"])
+                    target = (sig_bt["tgt1"]
+                              if direction=="UPTREND"
+                              else sig_bt["tgt1s"])
+                    signal_date = window_df.index[-1]
+
+                    # Check outcome on next candles
+                    future = bt_df.iloc[
+                        start_i+window_size:
+                        start_i+window_size+10
+                    ]
+                    if future.empty:
+                        continue
+
+                    outcome  = "OPEN"
+                    exit_px  = float(future["Close"].iloc[-1])
+                    exit_dt  = future.index[-1]
+
+                    for _, row_f in future.iterrows():
+                        if direction == "UPTREND":
+                            if float(row_f["Low"]) <= sl:
+                                outcome = "LOSS"
+                                exit_px = sl
+                                exit_dt = row_f.name
+                                break
+                            if float(row_f["High"]) >= target:
+                                outcome = "WIN"
+                                exit_px = target
+                                exit_dt = row_f.name
+                                break
+                        else:
+                            if float(row_f["High"]) >= sl:
+                                outcome = "LOSS"
+                                exit_px = sl
+                                exit_dt = row_f.name
+                                break
+                            if float(row_f["Low"]) <= target:
+                                outcome = "WIN"
+                                exit_px = target
+                                exit_dt = row_f.name
+                                break
+
+                    if outcome == "OPEN":
+                        pnl_bt = (
+                            (exit_px - entry_price)
+                            if direction=="UPTREND"
+                            else (entry_price - exit_px)
+                        )
+                        outcome = "WIN" if pnl_bt > 0 else "LOSS"
+                    else:
+                        pnl_bt = (
+                            (exit_px - entry_price)
+                            if direction=="UPTREND"
+                            else (entry_price - exit_px)
+                        )
+
+                    pnl_pct = round(pnl_bt/entry_price*100, 2)
+
+                    trades.append({
+                        "Date":      signal_date.strftime("%d %b"),
+                        "Direction": direction,
+                        "Score":     score,
+                        "Entry":     round(entry_price, 2),
+                        "Exit":      round(exit_px, 2),
+                        "P&L pts":   round(pnl_bt, 2),
+                        "P&L %":     pnl_pct,
+                        "Result":    outcome,
+                    })
+                except Exception:
+                    continue
+
+            prog_bt.empty()
+
+            if not trades:
+                st.warning(
+                    f"No signals found with score {bt_min_score}+. "
+                    "Try lowering the minimum score."
+                )
+            else:
+                df_bt = pd.DataFrame(trades)
+                wins  = df_bt[df_bt["Result"]=="WIN"]
+                losses= df_bt[df_bt["Result"]=="LOSS"]
+                wr_bt = round(len(wins)/len(df_bt)*100,1)
+                avg_w = round(wins["P&L %"].mean(),2) if len(wins)>0 else 0
+                avg_l = round(losses["P&L %"].mean(),2) if len(losses)>0 else 0
+                pf_bt = round(
+                    abs(wins["P&L %"].sum()) /
+                    (abs(losses["P&L %"].sum())+0.001), 2
+                )
+                total_ret = round(df_bt["P&L %"].sum(), 2)
+
+                # Summary metrics
+                bm1,bm2,bm3,bm4,bm5 = st.columns(5)
+                bm1.metric("Total Trades", len(df_bt))
+                bm2.metric("Win Rate",     f"{wr_bt}%")
+                bm3.metric("Profit Factor",f"{pf_bt}")
+                bm4.metric("Avg Win",      f"{avg_w}%")
+                bm5.metric("Avg Loss",     f"{avg_l}%")
+
+                # Verdict
+                if wr_bt >= 55 and pf_bt >= 1.5:
+                    st.success(
+                        f"🔥 Strong strategy! Win rate {wr_bt}% | "
+                        f"Profit factor {pf_bt} | "
+                        f"Total return {total_ret}% over "
+                        f"{bt_months} months. "
+                        f"This signal system is working well."
+                    )
+                elif wr_bt >= 45 and pf_bt >= 1.0:
+                    st.warning(
+                        f"📈 Decent strategy. Win rate {wr_bt}% | "
+                        f"Profit factor {pf_bt}. "
+                        f"Profitable but room to improve."
+                    )
+                else:
+                    st.error(
+                        f"⚠️ Weak results. Win rate {wr_bt}% | "
+                        f"Profit factor {pf_bt}. "
+                        f"Try increasing min score or "
+                        f"changing timeframe."
+                    )
+
+                # Equity curve
+                import plotly.graph_objects as go_bt
+                cumulative = [100]
+                for _, row_b in df_bt.iterrows():
+                    cumulative.append(
+                        cumulative[-1] * (1 + row_b["P&L %"]/100)
+                    )
+
+                fig_bt = go_bt.Figure()
+                fig_bt.add_trace(go_bt.Scatter(
+                    y=cumulative,
+                    mode="lines",
+                    line=dict(
+                        color="#16a34a"
+                        if cumulative[-1] >= 100
+                        else "#dc2626",
+                        width=2
+                    ),
+                    fill="tozeroy",
+                    fillcolor=(
+                        "rgba(22,163,74,0.1)"
+                        if cumulative[-1] >= 100
+                        else "rgba(220,38,38,0.1)"
+                    ),
+                    name="Equity Curve"
+                ))
+                fig_bt.add_hline(
+                    y=100,
+                    line_dash="dash",
+                    line_color="#94a3b8",
+                    annotation_text="Starting capital"
+                )
+                fig_bt.update_layout(
+                    template="plotly_white",
+                    height=280,
+                    title=(
+                        f"Equity Curve — "
+                        f"{bt_stock} {bt_tf} "
+                        f"(Score {bt_min_score}+)"
+                    ),
+                    yaxis_title="Portfolio value (start=100)",
+                    margin=dict(l=10,r=10,t=40,b=10)
+                )
+                st.plotly_chart(fig_bt, use_container_width=True)
+
+                # Win/Loss chart
+                fig_wl = go_bt.Figure(go_bt.Bar(
+                    x=df_bt["Date"],
+                    y=df_bt["P&L %"],
+                    marker_color=[
+                        "#16a34a" if r=="WIN" else "#dc2626"
+                        for r in df_bt["Result"]
+                    ],
+                    name="P&L %"
+                ))
+                fig_wl.update_layout(
+                    template="plotly_white",
+                    height=220,
+                    title="Individual trade P&L %",
+                    margin=dict(l=10,r=10,t=40,b=40),
+                    xaxis_tickangle=-45
+                )
+                st.plotly_chart(fig_wl, use_container_width=True)
+
+                # Full trades table
+                with st.expander("All trades"):
+                    st.dataframe(
+                        df_bt,
+                        width='stretch',
+                        hide_index=True
+                    )
+
+    else:
+        st.info(
+            "Configure settings above and click "
+            "**Run Backtest** to test your strategy "
+            "on historical data."
+        )
+        st.markdown("""
+        ### How backtesting works
+
+        The backtest takes every 15m/1h/1d candle from the past
+        and runs your signal engine on it. When score crosses
+        your minimum threshold it records a virtual trade.
+
+        Then it checks the next 10 candles to see if the trade
+        hit the target (WIN) or stop loss (LOSS).
+
+        **What good results look like:**
+
+        | Metric | Target |
+        |--------|--------|
+        | Win Rate | 45% or above |
+        | Profit Factor | 1.5 or above |
+        | Avg Win > Avg Loss | Always |
+
+        **Important:** Backtesting on daily (1d) timeframe
+        is most reliable. 15m backtests have many false
+        signals due to noise.
+        """)
+
+
 # ── Auto refresh ──────────────────────────────────────────
 if auto_rf:
     st.sidebar.success("🔄 Refreshing every 2 min...")

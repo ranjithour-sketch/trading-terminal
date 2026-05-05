@@ -1517,7 +1517,9 @@ def live_price(sym: str) -> dict:
                 "low": round(float(q["ohlc"]["low"]),2),
                 "source":"kite"
             }
-        except:
+        except Exception as _kite_err:
+            # Store error for debugging
+            st.session_state["kite_candle_error"] = str(_kite_err)
             pass  # Fall through to Yahoo
 
     # ── Yahoo Finance fallback ────────────────────────────
@@ -1548,22 +1550,26 @@ def live_price(sym: str) -> dict:
     return _yahoo_price(sym)
 
 @st.cache_data(ttl=3600)
-def get_kite_instruments() -> dict:
+def get_kite_instruments(_token: str = "") -> dict:
     """
     Cache NSE instruments list for 1 hour.
-    Avoids fetching full list on every candle request.
+    _token parameter busts cache when session changes.
     Returns dict: {tradingsymbol: instrument_token}
     """
-    kite = get_kite()
-    if not kite:
+    if not _token or not KITE_AVAILABLE or not KITE_API_KEY:
         return {}
     try:
-        instruments = kite.instruments("NSE")
-        return {
+        kite_inst = KiteConnect(api_key=KITE_API_KEY)
+        kite_inst.set_access_token(_token)
+        instruments = kite_inst.instruments("NSE")
+        result = {
             inst["tradingsymbol"]: inst["instrument_token"]
             for inst in instruments
         }
-    except:
+        st.session_state["kite_instruments_count"] = len(result)
+        return result
+    except Exception as e:
+        st.session_state["kite_inst_error"] = str(e)
         return {}
 
 def candles(sym: str, interval: str) -> pd.DataFrame:
@@ -1598,8 +1604,22 @@ def candles(sym: str, interval: str) -> pd.DataFrame:
             to_dt   = datetime.now()
 
             # Use cached instruments lookup
-            instruments_map = get_kite_instruments()
+            # Pass token so cache busts when new login happens
+            _cur_token = st.session_state.get(
+                "kite_access_token", ""
+            )
+            instruments_map = get_kite_instruments(_cur_token)
             inst_token = instruments_map.get(nse_sym)
+
+            # Debug: store which path was taken
+            if inst_token:
+                st.session_state["kite_data_source"] = (
+                    f"Kite: {nse_sym} token {inst_token}"
+                )
+            else:
+                st.session_state["kite_data_source"] = (
+                    f"Kite: {nse_sym} NOT FOUND in instruments"
+                )
 
             if inst_token:
                 hist = kite.historical_data(
@@ -1624,7 +1644,9 @@ def candles(sym: str, interval: str) -> pd.DataFrame:
                         df_k.index = df_k.index.tz_convert(IST)
                     df_k.dropna(inplace=True)
                     return df_k
-        except:
+        except Exception as _kite_err:
+            # Store error for debugging
+            st.session_state["kite_candle_error"] = str(_kite_err)
             pass  # Fall through to Yahoo
 
     # ── Yahoo Finance fallback (cached) ───────────────────
@@ -2799,16 +2821,31 @@ with T2:
 
     # Show data source indicator
     _kite_on = kite_is_connected()
+    _kite_src = st.session_state.get("kite_data_source","")
+    _kite_err = st.session_state.get("kite_candle_error","")
     _src_col  = "#f0fdf4" if _kite_on else "#fffbeb"
     _src_bdr  = "#86efac" if _kite_on else "#fcd34d"
     _src_txt  = "#166534" if _kite_on else "#92400e"
-    _src_msg  = (
-        "⚡ <b>Kite LIVE</b> — Real-time candles active. "
-        "All signals are based on live data."
-        if _kite_on else
-        "📊 <b>Yahoo Finance</b> — Chart candles have ~15 min delay. "
-        "Login with Kite in sidebar for live signals."
-    )
+
+    if _kite_on and _kite_src.startswith("Kite:") and "token" in _kite_src:
+        _src_msg = (
+            "⚡ <b>Kite LIVE</b> — Real-time candles active. "
+            "All signals are live."
+        )
+    elif _kite_on:
+        _src_msg = (
+            "⚡ Kite connected but loading candle data... "
+            "First load takes ~30 seconds to fetch instruments."
+            + (f" Error: {_kite_err}" if _kite_err else "")
+        )
+        _src_col = "#fffbeb"
+        _src_bdr = "#fcd34d"
+        _src_txt = "#92400e"
+    else:
+        _src_msg = (
+            "📊 <b>Yahoo Finance</b> — 15 min delay. "
+            "Login with Kite in sidebar for live signals."
+        )
     st.markdown(
         f"<div style='background:{_src_col};border:1px solid {_src_bdr};"
         f"border-radius:8px;padding:8px 14px;margin-bottom:8px;"

@@ -123,6 +123,46 @@ def save_creds(token: str, chat: str):
 # Load credentials on every page load
 load_creds()
 
+# ── Background ML Pre-training ────────────────────────────
+# Train ML models for top stocks at startup
+# Stored in session_state so Diamond scan is instant
+def pretrain_ml_models(stock_list: list, max_stocks: int = 20):
+    """
+    Pre-train ML models for top stocks in background.
+    Called once at startup. Results cached in session_state.
+    """
+    if "ml_models_trained" in st.session_state:
+        return  # Already trained this session
+
+    trained = {}
+    for sname in stock_list[:max_stocks]:
+        sym = STOCKS.get(sname)
+        if not sym:
+            continue
+        try:
+            df_ml = candles(sym, "1d")
+            if df_ml is not None and len(df_ml) >= 100:
+                model = train_model(df_ml)
+                if model.get("ok"):
+                    pred = predict_next_move(df_ml, model)
+                    if pred and pred.get("ok"):
+                        trained[sname] = {
+                            "direction":  pred["prediction"],
+                            "confidence": pred["confidence"],
+                            "reliability":pred["reliability"],
+                            "ok": True
+                        }
+        except Exception:
+            continue
+
+    st.session_state["ml_pretrained"]    = trained
+    st.session_state["ml_models_trained"]= True
+
+def get_ml_cached(sname: str) -> dict:
+    """Get pre-trained ML result for a stock. Returns dict or None."""
+    cache = st.session_state.get("ml_pretrained", {})
+    return cache.get(sname)
+
 # ── Kite session management ───────────────────────────────
 def get_kite() -> "KiteConnect | None":
     """Returns authenticated KiteConnect instance or None."""
@@ -1177,7 +1217,7 @@ STOCKS = {
     "Vardhman Textile": "VTL.NS",
     "GHCL":             "GHCL.NS",
     "KPR Mill":         "KPRMILL.NS",
-    "Welspun India":    "WELSPUNIND.NS",
+    "Welspun India":    "WELSPUNLTD.NS",
     # ── Real Estate & Construction ────────────────────
     "NCC Ltd":          "NCC.NS",
     "KNR Constructions":"KNRCON.NS",
@@ -1275,8 +1315,7 @@ STOCKS = {
 
     # ── India Gold/Silver ETFs on NSE ─────────────────────
     "Nippon Gold ETF":      "GOLDBEES.NS",
-    "SBI Gold ETF":         "SBIGETS.NS",
-    "HDFC Gold ETF":        "HDFCMFGETF.NS",
+    "SBI Gold ETF":         "SETFGOLD.NS",
     "Nippon Silver ETF":    "SILVERBEES.NS",
 
     # ── Energy ────────────────────────────────────────────
@@ -1432,11 +1471,10 @@ SECTORS = {
         "Crude Oil (MCX)","Brent Crude","Natural Gas (MCX)",
     ],
     "⚙️ Base Metals MCX": [
-        "Copper (MCX)","Aluminium","Nickel","Zinc","Lead",
+        "Copper (MCX)","Aluminium","Lead",
     ],
     "🌾 Agricultural MCX": [
-        "Cotton (MCX)","Mentha Oil","Castor Seed",
-        "Crude Palm Oil","Cardamom",
+        "Cotton (MCX)",
     ],
     "💱 Currency": [
         "USD/INR","EUR/INR","GBP/INR","JPY/INR",
@@ -2533,6 +2571,42 @@ else:
 
 st.sidebar.markdown("---")
 
+# ── ML Pre-training status ────────────────────────────────
+ml_trained = st.session_state.get("ml_models_trained", False)
+ml_cache   = st.session_state.get("ml_pretrained", {})
+
+if ml_trained:
+    st.sidebar.success(
+        f"🤖 ML Ready — {len(ml_cache)} stocks pre-trained"
+    )
+else:
+    st.sidebar.info("🤖 ML not pre-trained yet")
+    if st.sidebar.button(
+        "Train ML Models (faster Diamond scan)",
+        key="pretrain_ml_btn"
+    ):
+        # Get current scan group stocks
+        _scan_grp = st.session_state.get("scan_group","")
+        _top_stocks = (
+            SECTORS.get(_scan_grp, []) if _scan_grp in SECTORS
+            else [
+                "NIFTY 50","BANK NIFTY","Reliance",
+                "HDFC Bank","ICICI Bank","TCS","Infosys",
+                "SBI","Wipro","Bajaj Finance","ITC",
+                "Sun Pharma","L&T","Maruti","Axis Bank",
+                "HCL Tech","ONGC","Bharti Airtel",
+                "Tata Steel","JSW Steel"
+            ]
+        )
+        with st.sidebar:
+            with st.spinner(
+                f"Training ML for {len(_top_stocks[:20])} stocks..."
+            ):
+                pretrain_ml_models(_top_stocks, max_stocks=20)
+        st.rerun()
+
+st.sidebar.markdown("---")
+
 # Stock search
 # Use empty string "" as label — avoids _arrow_right corruption
 # Do NOT use label_visibility="collapsed" — that causes the bug
@@ -2624,7 +2698,13 @@ for ni, nm in enumerate(SIDEBAR_PICKS[sidebar_sector]):
 st.sidebar.markdown("---")
 tf = st.sidebar.selectbox(
     "Timeframe",
-    ["1m","5m","15m","30m","1h","1d"], index=2)
+    ["1m","5m","15m","30m","1h","1d"],
+    index=2,
+    key="global_tf"
+)
+# Sync scanner timeframe with global timeframe
+if "scan_tf" not in st.session_state:
+    st.session_state["scan_tf"] = tf
 
 auto_rf = st.sidebar.checkbox("Auto Refresh (2 min)", False)
 
@@ -2847,6 +2927,20 @@ with T2:
         unsafe_allow_html=True
     )
     inline_stock_search("t2")
+
+    # Show which sector this stock is in
+    _stock_sector = None
+    for _sname, _stocks in SECTORS.items():
+        if sname in _stocks:
+            _stock_sector = _sname
+            break
+    if _stock_sector:
+        st.caption(
+            f"📂 {sname} is in **{_stock_sector}** sector. "
+            f"To find it in Auto Scanner — select '{_stock_sector}' "
+            f"and scan on same timeframe ({tf})."
+        )
+
     st.markdown("---")
 
     # ── Live price card ───────────────────────────────────
@@ -3108,6 +3202,167 @@ with T2:
         st.info(
             "⚠️ Timeframes conflicting — "
             "mixed signals. Wait for alignment."
+        )
+
+    # ── ML Prediction + Diamond Verdict ──────────────────
+    st.markdown("---")
+    st.markdown("### 🤖 ML Confirmation")
+    st.caption(
+        "ML is trained on this stock's own historical data. "
+        "When ML agrees with technical signal — "
+        "confidence is significantly higher."
+    )
+
+    with st.spinner("Running ML prediction..."):
+        try:
+            _ml_df = candles(stick, "1d")
+            _ml_pred = None
+            _ml_dir  = "UNKNOWN"
+            _ml_conf = 0
+            _ml_ok   = False
+            if _ml_df is not None and len(_ml_df) >= 100:
+                _ml_model = train_model(_ml_df)
+                if _ml_model.get("ok"):
+                    _ml_pred = predict_next_move(_ml_df, _ml_model)
+                    if _ml_pred and _ml_pred.get("ok"):
+                        _ml_dir  = _ml_pred["prediction"]
+                        _ml_conf = _ml_pred["confidence"]
+                        _ml_ok   = True
+        except Exception:
+            _ml_ok = False
+
+    # Current signal direction from Trade Setup
+    _t2_dir = sig["direction"] if sig else "UNKNOWN"
+    _ml_agrees = _ml_ok and _ml_dir == _t2_dir
+    _mtf_all   = bull_c == 3 or bear_c == 3
+
+    # Show ML result
+    ml_col1, ml_col2 = st.columns(2)
+    with ml_col1:
+        if _ml_ok:
+            _mc = "#16a34a" if _ml_dir=="UPTREND" else "#dc2626" if _ml_dir=="DOWNTREND" else "#f59e0b"
+            _mb = "#f0fdf4" if _ml_dir=="UPTREND" else "#fef2f2" if _ml_dir=="DOWNTREND" else "#fffbeb"
+            st.markdown(
+                f"<div style='background:{_mb};"
+                f"border:1.5px solid {_mc};"
+                f"border-radius:12px;padding:16px;"
+                f"text-align:center'>"
+                f"<div style='font-size:11px;color:#64748b;"
+                f"text-transform:uppercase;letter-spacing:1px'>"
+                f"ML Prediction (Daily)</div>"
+                f"<div style='font-size:28px;font-weight:700;"
+                f"color:{_mc};margin:6px 0'>{_ml_dir}</div>"
+                f"<div style='font-size:14px;color:{_mc};"
+                f"font-weight:600'>{_ml_conf}% confidence</div>"
+                f"<div style='font-size:12px;color:#64748b;"
+                f"margin-top:4px'>{_ml_pred.get('reliability','')}</div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+        else:
+            st.info("ML needs 100+ daily candles for this stock.")
+
+    with ml_col2:
+        # Agreement summary
+        _agree_count = sum([
+            _ml_agrees,
+            _mtf_all,
+            sig["up_score"] >= 7 if _t2_dir=="UPTREND"
+            else sig["dn_score"] >= 7
+        ])
+        st.markdown(
+            f"<div style='background:#f8fafc;"
+            f"border:1px solid #e2e8f0;"
+            f"border-radius:12px;padding:16px'>"
+            f"<div style='font-size:13px;font-weight:700;"
+            f"color:#374151;margin-bottom:12px'>"
+            f"Confirmation Checklist</div>"
+            f"<div style='font-size:13px;line-height:2.2'>"
+            f"{'✅' if sig['up_score']>=7 or sig['dn_score']>=7 else '❌'} "
+            f"Technical score 7+ "
+            f"({max(sig['up_score'],sig['dn_score'])}/10)<br>"
+            f"{'✅' if _ml_agrees else '❌'} "
+            f"ML prediction agrees "
+            f"({'Yes' if _ml_agrees else 'No — ' + _ml_dir})<br>"
+            f"{'✅' if _mtf_all else '❌'} "
+            f"All 3 timeframes agree "
+            f"({'Yes' if _mtf_all else str(max(bull_c,bear_c)) + '/3 agree'})<br>"
+            f"{'✅' if sig.get('st_bull') == (_t2_dir=='UPTREND') else '❌'} "
+            f"Supertrend confirms</div>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+    # Diamond verdict for manually searched stock
+    st.markdown("---")
+    _is_diamond = (
+        _ml_agrees and _mtf_all and
+        (sig["up_score"] >= 7 or sig["dn_score"] >= 7)
+    )
+
+    if _is_diamond:
+        _d_action = "BUY CE" if _t2_dir == "UPTREND" else "BUY PE"
+        st.markdown(
+            f"<div style='background:linear-gradient("
+            f"135deg,#1e1b4b,#3730a3);"
+            f"border-radius:14px;padding:20px 24px;"
+            f"text-align:center'>"
+            f"<div style='font-size:28px;font-weight:700;"
+            f"color:#ffffff'>💎 DIAMOND SIGNAL</div>"
+            f"<div style='font-size:16px;color:#c7d2fe;"
+            f"margin-top:8px'>{sname} — {_d_action}</div>"
+            f"<div style='font-size:13px;color:#a5b4fc;"
+            f"margin-top:6px'>"
+            f"Technical ✅  ML ✅  All 3 Timeframes ✅</div>"
+            f"<div style='font-size:13px;color:#818cf8;"
+            f"margin-top:4px'>"
+            f"ML: {_ml_dir} ({_ml_conf}%) | "
+            f"Score: {max(sig['up_score'],sig['dn_score'])}/10"
+            f"</div></div>",
+            unsafe_allow_html=True
+        )
+        # Send to Telegram
+        if tg_configured():
+            if st.button(
+                "📱 Send Diamond Signal to Telegram",
+                key="t2_send_diamond",
+                type="primary",
+                use_container_width=True
+            ):
+                _tok = st.session_state.get("tg_token_saved","")
+                _cid = st.session_state.get("tg_chat_saved","")
+                _msg = (
+                    f"💎 DIAMOND — {sname}\n"
+                    f"{_d_action} | "
+                    f"Score {max(sig['up_score'],sig['dn_score'])}/10\n"
+                    f"ML: {_ml_dir} ({_ml_conf}%)\n"
+                    f"All 3 timeframes confirmed\n"
+                    f"Price: Rs {sig['cp']:,.2f}\n"
+                    f"Entry: Rs {sig['e9v']:,.2f} | "
+                    f"SL: Rs {sig['sl_long'] if _t2_dir=='UPTREND' else sig['sl_short']:,.2f}\n"
+                    f"T1: Rs {sig['tgt1'] if _t2_dir=='UPTREND' else sig['tgt1s']:,.2f}"
+                )
+                if send_telegram(_tok, _cid, _msg):
+                    st.success("✅ Diamond signal sent to Telegram!")
+                else:
+                    st.error("❌ Failed to send")
+    elif _ml_agrees:
+        st.success(
+            f"⚡ ML agrees with technical signal ({_ml_dir}) — "
+            f"good setup. Waiting for all 3 timeframes to align "
+            f"for Diamond confirmation."
+        )
+    elif _mtf_all:
+        st.warning(
+            f"⚡ All timeframes agree but ML says {_ml_dir}. "
+            f"Technical signal is strong. "
+            f"Trade with caution."
+        )
+    else:
+        st.info(
+            "No Diamond Signal yet for this stock. "
+            "Technical score, ML and all timeframes need to "
+            "agree simultaneously."
         )
 
     # ── 11-FACTOR CHECKLISTS ───────────────────────────────
@@ -4470,7 +4725,7 @@ with T3:
     st.markdown("---")
 
     # ── Scanner controls ───────────────────────────────────
-    sc1, sc2 = st.columns([2, 1])
+    sc1, sc2, sc3 = st.columns([2, 1, 1])
     with sc1:
         scan_group = st.selectbox(
             "Stock group to scan",
@@ -4478,12 +4733,45 @@ with T3:
             key="scan_group"
         )
     with sc2:
+        # Default to same timeframe as Trade Setup sidebar
+        _global_tf  = st.session_state.get("global_tf","15m")
+        _tf_options = ["15m","30m","1h","1d"]
+        _tf_default = _tf_options.index(_global_tf) if _global_tf in _tf_options else 0
         scan_tf = st.selectbox(
             "Timeframe",
-            ["15m","30m","1h","1d"],
-            index=0,
-            key="scan_tf"
+            _tf_options,
+            index=_tf_default,
+            key="scan_tf",
+            help="Matches Trade Setup timeframe automatically"
         )
+    with sc3:
+        min_rr_scan = st.selectbox(
+            "Min R:R",
+            ["1.0","1.5","2.0"],
+            index=0,
+            key="min_rr_scan",
+            help="Minimum Risk:Reward ratio"
+        )
+
+    # Show timeframe sync status
+    _gtf = st.session_state.get("global_tf","15m")
+    if scan_tf == _gtf:
+        st.success(
+            f"✅ Scanner timeframe ({scan_tf}) matches "
+            f"Trade Setup timeframe ({_gtf}) — "
+            f"scores will be consistent."
+        )
+    else:
+        st.warning(
+            f"⚠️ Scanner uses {scan_tf} but Trade Setup uses {_gtf}. "
+            f"Scores may differ. Change sidebar timeframe to {scan_tf} "
+            f"to match."
+        )
+    st.caption(
+        "Scanner uses the exact same scoring logic as Trade Setup. "
+        "If a stock scores 7+ in Trade Setup on 15m — "
+        "select its sector and scan on 15m to find it here."
+    )
 
     sl1, sl2 = st.columns(2)
     with sl1:
@@ -4726,8 +5014,9 @@ with T3:
                 reward = abs(t1_v - sig["cp"])
                 rr     = round(reward/(risk+0.001), 2)
 
-                # ── Fix 1: Skip if R:R < 1.5 ──────────────
-                if rr < 1.5:
+                # ── Fix 1: Skip if R:R below threshold ─────
+                _min_rr = float(st.session_state.get("min_rr_scan","1.0"))
+                if rr < _min_rr:
                     continue
 
                 # CPR is informational only — not used as filter
@@ -4843,6 +5132,73 @@ with T3:
                 }
                 results.append(result)
 
+                # ── ML + Multi-timeframe confirmation ─────────
+                # Use pre-trained cache if available (faster)
+                ml_direction  = "UNKNOWN"
+                ml_confidence = 0
+                ml_agrees     = False
+                mtf_1h_dir    = "UNKNOWN"
+                mtf_1d_dir    = "UNKNOWN"
+
+                _cached_ml = get_ml_cached(sname)
+                if _cached_ml and _cached_ml.get("ok"):
+                    ml_direction  = _cached_ml["direction"]
+                    ml_confidence = _cached_ml["confidence"]
+                    ml_agrees     = (ml_direction == direction)
+                else:
+                    # Train fresh if not cached
+                    try:
+                        df_ml = candles(sym, "1d")
+                        if df_ml is not None and len(df_ml) >= 100:
+                            ml_model = train_model(df_ml)
+                            if ml_model.get("ok"):
+                                ml_pred = predict_next_move(
+                                    df_ml, ml_model
+                                )
+                                if ml_pred and ml_pred.get("ok"):
+                                    ml_direction  = ml_pred["prediction"]
+                                    ml_confidence = ml_pred["confidence"]
+                                    ml_agrees = (ml_direction == direction)
+                    except Exception:
+                        pass
+
+                try:
+                    df_1h = candles(sym, "1h")
+                    if df_1h is not None and len(df_1h) >= 55:
+                        sig_1h = compute_all(df_1h, slp)
+                        if sig_1h:
+                            mtf_1h_dir = sig_1h["direction"]
+                except Exception:
+                    pass
+
+                try:
+                    df_1d = candles(sym, "1d")
+                    if df_1d is not None and len(df_1d) >= 55:
+                        sig_1d = compute_all(df_1d, slp)
+                        if sig_1d:
+                            mtf_1d_dir = sig_1d["direction"]
+                except Exception:
+                    pass
+
+                mtf_all_ok = (
+                    mtf_1h_dir == direction and
+                    mtf_1d_dir == direction
+                )
+                is_diamond = (
+                    ml_agrees and mtf_all_ok and
+                    confidence in ["HIGH","MEDIUM"] and
+                    rr >= 1.5
+                )
+
+                result["ML_Direction"]  = ml_direction
+                result["ML_Confidence"] = ml_confidence
+                result["ML_Agrees"]     = ml_agrees
+                result["MTF_1H"]        = mtf_1h_dir
+                result["MTF_1D"]        = mtf_1d_dir
+                result["MTF_All_OK"]    = mtf_all_ok
+                result["Is_Diamond"]    = is_diamond
+
+
                 # No auto alerts — user sends manually
 
             except Exception:
@@ -4884,6 +5240,183 @@ with T3:
         sm5.metric("BUY PE",    len(pe_list))
 
         # ── Strong signals ─────────────────────────────────
+        # ── 💎 DIAMOND SIGNALS ──────────────────────────
+        diamond_r = [
+            r for r in results_sorted
+            if r.get("Is_Diamond", False)
+        ]
+
+        if diamond_r:
+                st.markdown("---")
+                _d_count = len(diamond_r)
+                st.markdown(
+                    f"<div style='background:linear-gradient("
+                    f"135deg,#1e1b4b,#3730a3);"
+                    f"border-radius:14px;padding:16px 20px;"
+                    f"margin-bottom:16px'>"
+                    f"<div style='font-size:22px;font-weight:700;"
+                    f"color:#ffffff'>💎 DIAMOND SIGNALS"
+                    f" — {_d_count} found</div>"
+                    f"<div style='font-size:13px;color:#c7d2fe;"
+                    f"margin-top:4px'>"
+                    f"Technical + ML + All 3 Timeframes confirmed."
+                    f" Highest possible confidence.</div></div>",
+                    unsafe_allow_html=True
+                )
+
+                for idx_d, r in enumerate(diamond_r):
+                    _dc  = "#16a34a" if r["Direction"]=="UPTREND" else "#dc2626"
+                    _dbg = "#f0fdf4" if r["Direction"]=="UPTREND" else "#fef2f2"
+                    _ml_dir  = r.get("ML_Direction","—")
+                    _ml_conf = r.get("ML_Confidence", 0)
+                    st.markdown(
+                        f"<div style='background:linear-gradient("
+                        f"135deg,#faf5ff,#ede9fe);"
+                        f"border:2px solid #7c3aed;"
+                        f"border-radius:14px;padding:18px;"
+                        f"margin-bottom:12px'>"
+                        f"<div style='display:flex;justify-content:"
+                        f"space-between;align-items:center;"
+                        f"flex-wrap:wrap;gap:8px;margin-bottom:10px'>"
+                        f"<div><span style='font-size:20px;"
+                        f"font-weight:700;color:#1e293b'>"
+                        f"{r['Stock']}</span>"
+                        f"<span style='background:#7c3aed;color:white;"
+                        f"padding:3px 10px;border-radius:12px;"
+                        f"font-size:11px;margin-left:8px'>"
+                        f"💎 DIAMOND</span></div>"
+                        f"<span style='background:{_dbg};color:{_dc};"
+                        f"padding:4px 16px;border-radius:20px;"
+                        f"font-size:14px;font-weight:700'>"
+                        f"{r['Action']}</span></div>"
+                        f"<div style='display:grid;"
+                        f"grid-template-columns:repeat(4,1fr);"
+                        f"gap:8px;margin-bottom:10px'>"
+                        f"<div style='background:white;"
+                        f"border-radius:8px;padding:10px;"
+                        f"text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b'>"
+                        f"Technical</div>"
+                        f"<div style='font-size:20px;font-weight:700;"
+                        f"color:{_dc}'>{r['Score']}/10</div></div>"
+                        f"<div style='background:white;"
+                        f"border-radius:8px;padding:10px;"
+                        f"text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b'>"
+                        f"ML</div>"
+                        f"<div style='font-size:13px;font-weight:700;"
+                        f"color:#7c3aed'>{_ml_dir}</div>"
+                        f"<div style='font-size:11px;color:#64748b'>"
+                        f"{_ml_conf}%</div></div>"
+                        f"<div style='background:white;"
+                        f"border-radius:8px;padding:10px;"
+                        f"text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b'>"
+                        f"Timeframes</div>"
+                        f"<div style='font-size:11px;color:#16a34a;"
+                        f"font-weight:700'>15m ✅ 1h ✅ 1d ✅"
+                        f"</div></div>"
+                        f"<div style='background:white;"
+                        f"border-radius:8px;padding:10px;"
+                        f"text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b'>"
+                        f"R:R</div>"
+                        f"<div style='font-size:20px;font-weight:700;"
+                        f"color:#1e293b'>{r['RR']}:1</div></div></div>"
+                        f"<div style='display:grid;"
+                        f"grid-template-columns:repeat(4,1fr);"
+                        f"gap:6px;margin-bottom:8px'>"
+                        f"<div style='background:#f0fdf4;"
+                        f"border-radius:6px;padding:8px;"
+                        f"text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b'>"
+                        f"Entry</div>"
+                        f"<div style='font-size:14px;font-weight:700;"
+                        f"color:#16a34a'>₹{r['Entry']:,.0f}</div></div>"
+                        f"<div style='background:#fef2f2;"
+                        f"border-radius:6px;padding:8px;"
+                        f"text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b'>"
+                        f"SL</div>"
+                        f"<div style='font-size:14px;font-weight:700;"
+                        f"color:#dc2626'>₹{r['SL']:,.0f}</div></div>"
+                        f"<div style='background:#eff6ff;"
+                        f"border-radius:6px;padding:8px;"
+                        f"text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b'>"
+                        f"T1</div>"
+                        f"<div style='font-size:14px;font-weight:700;"
+                        f"color:#1d4ed8'>₹{r['T1']:,.0f}</div></div>"
+                        f"<div style='background:#eff6ff;"
+                        f"border-radius:6px;padding:8px;"
+                        f"text-align:center'>"
+                        f"<div style='font-size:10px;color:#64748b'>"
+                        f"T2</div>"
+                        f"<div style='font-size:14px;font-weight:700;"
+                        f"color:#1d4ed8'>₹{r['T2']:,.0f}</div></div>"
+                        f"</div>"
+                        f"<div style='font-size:12px;color:#7c3aed'>"
+                        f"<b>{r['OptType']}</b> | ATM ✅ {r['ATM']} "
+                        f"| ITM {r['ITM']} | OTM {r['OTM']}"
+                        f"</div></div>",
+                        unsafe_allow_html=True
+                    )
+                    _dc1, _dc2, _dc3 = st.columns(3)
+                    with _dc1:
+                        if st.button(
+                            "📊 Trade Setup",
+                            key=f"dia_ts_{idx_d}",
+                            type="primary",
+                            use_container_width=True
+                        ):
+                            st.session_state["sn"] = r["Stock"]
+                            st.session_state["st"] = r["Sym"]
+                            st.rerun()
+                    with _dc2:
+                        if st.button(
+                            "🔬 Full Analysis",
+                            key=f"dia_fa_{idx_d}",
+                            use_container_width=True
+                        ):
+                            _dk = f"expand_dia_{idx_d}"
+                            st.session_state[_dk] = (
+                                not st.session_state.get(_dk, False)
+                            )
+                    with _dc3:
+                        if tg_configured():
+                            if st.button(
+                                "📱 Send Signal",
+                                key=f"dia_tg_{idx_d}",
+                                use_container_width=True
+                            ):
+                                _tok = st.session_state.get(
+                                    "tg_token_saved", ""
+                                )
+                                _cid = st.session_state.get(
+                                    "tg_chat_saved", ""
+                                )
+                                _msg = (
+                                    f"💎 DIAMOND — {r['Stock']}\n"
+                                    f"{r['Action']} | "
+                                    f"Score {r['Score']}/10\n"
+                                    f"ML: {_ml_dir} ({_ml_conf}%)\n"
+                                    f"All 3 timeframes confirmed\n"
+                                    f"Entry Rs{r['Entry']:,.0f} | "
+                                    f"SL Rs{r['SL']:,.0f}\n"
+                                    f"T1 Rs{r['T1']:,.0f} | "
+                                    f"T2 Rs{r['T2']:,.0f}\n"
+                                    f"R:R {r['RR']}:1 | ATM {r['ATM']}"
+                                )
+                                if send_telegram(_tok, _cid, _msg):
+                                    st.success("Diamond signal sent!")
+                                else:
+                                    st.error("Failed to send")
+                    st.markdown(
+                        "<div style='margin:6px 0'></div>",
+                        unsafe_allow_html=True
+                    )
+
+
         if strong_r:
             st.markdown("---")
             sh1, sh2 = st.columns([3,1])
@@ -5437,9 +5970,9 @@ with T3:
 
         with st.spinner("Scanning... please wait"):
             results, alerted = run_scan_engine(
-            stocks_to_scan, scan_tf,
-            min_score_scan, alert_score
-        )
+                stocks_to_scan, scan_tf,
+                min_score_scan, alert_score
+            )
         # Filter by combined score
         min_comb = st.session_state.get("min_combined_scan", 5)
         results = [
@@ -6633,6 +7166,276 @@ with T6:
             {"Index/Stock":"Tata Motors DVR","Lot":1425,"Approx Margin":"₹90K"},
         ])
         st.dataframe(lst, width="stretch", hide_index=True)
+
+
+# ── Risk Calculator ───────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 💰 Risk Calculator — Position Sizing")
+    st.caption(
+        "Never risk more than 2% of your capital per trade. "
+        "This calculator tells you exact lot size to buy."
+    )
+
+    rc1, rc2, rc3 = st.columns(3)
+    with rc1:
+        rc_capital = st.number_input(
+            "Your total capital (Rs)",
+            value=100000,
+            step=10000,
+            min_value=10000,
+            key="rc_capital"
+        )
+        rc_risk_pct = st.slider(
+            "Risk per trade (%)",
+            min_value=0.5,
+            max_value=5.0,
+            value=2.0,
+            step=0.5,
+            key="rc_risk_pct",
+            help="Professional traders risk max 2% per trade"
+        )
+    with rc2:
+        rc_entry = st.number_input(
+            "Entry price (Rs)",
+            value=float(sig["cp"]) if sig else 100.0,
+            step=0.5,
+            min_value=0.1,
+            key="rc_entry"
+        )
+        rc_sl = st.number_input(
+            "Stop loss price (Rs)",
+            value=float(sig["sl_long"]) if sig else 90.0,
+            step=0.5,
+            min_value=0.1,
+            key="rc_sl"
+        )
+    with rc3:
+        rc_lot = st.number_input(
+            "Lot size (shares per lot)",
+            value=50,
+            step=1,
+            min_value=1,
+            key="rc_lot",
+            help="Check NSE website for current lot size"
+        )
+        rc_target = st.number_input(
+            "Target price (Rs)",
+            value=float(sig["tgt1"]) if sig else 120.0,
+            step=0.5,
+            key="rc_target"
+        )
+
+    if st.button(
+        "Calculate Position Size",
+        type="primary",
+        key="rc_calc",
+        use_container_width=True
+    ):
+        rc_risk_amt    = rc_capital * rc_risk_pct / 100
+        rc_risk_per_sh = abs(rc_entry - rc_sl)
+        rc_reward      = abs(rc_target - rc_entry)
+        rc_rr          = round(rc_reward / (rc_risk_per_sh + 0.001), 2)
+
+        if rc_risk_per_sh <= 0:
+            st.error("Entry and Stop Loss cannot be the same price")
+        else:
+            rc_shares    = int(rc_risk_amt / rc_risk_per_sh)
+            rc_lots      = max(1, rc_shares // rc_lot)
+            rc_act_shares= rc_lots * rc_lot
+            rc_invest    = rc_act_shares * rc_entry
+            rc_max_loss  = rc_act_shares * rc_risk_per_sh
+            rc_max_gain  = rc_act_shares * rc_reward
+
+            rm1, rm2, rm3, rm4 = st.columns(4)
+            rm1.metric(
+                "Lots to buy",
+                f"{rc_lots} lots",
+                delta=f"{rc_act_shares} shares"
+            )
+            rm2.metric(
+                "Capital needed",
+                f"₹{rc_invest:,.0f}",
+                delta=f"{rc_invest/rc_capital*100:.1f}% of capital"
+            )
+            rm3.metric(
+                "Max loss",
+                f"₹{rc_max_loss:,.0f}",
+                delta=f"{rc_max_loss/rc_capital*100:.1f}% of capital",
+                delta_color="inverse"
+            )
+            rm4.metric(
+                "Max profit",
+                f"₹{rc_max_gain:,.0f}",
+                delta=f"R:R {rc_rr}:1"
+            )
+
+            if rc_rr >= 1.5:
+                st.success(
+                    f"✅ Good trade setup — R:R {rc_rr}:1 | "
+                    f"Buy {rc_lots} lots ({rc_act_shares} shares) | "
+                    f"Risk ₹{rc_max_loss:,.0f} "
+                    f"({rc_max_loss/rc_capital*100:.1f}% of capital)"
+                )
+            else:
+                st.warning(
+                    f"⚠️ R:R {rc_rr}:1 is below 1.5 — "
+                    f"consider skipping this trade or "
+                    f"moving target to improve R:R"
+                )
+
+    # ── Price Alerts ──────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 🔔 Price Alerts — Get Telegram notification")
+    st.caption(
+        "Set a price level for any stock. "
+        "The terminal checks every 2 minutes "
+        "and sends Telegram alert when price is hit."
+    )
+
+    if not tg_configured():
+        st.warning(
+            "Setup Telegram in Auto Scanner tab first "
+            "to receive price alerts."
+        )
+    else:
+        pa1, pa2, pa3, pa4 = st.columns(4)
+        with pa1:
+            pa_stock = st.text_input(
+                "Stock name",
+                value=sname if sname else "NIFTY 50",
+                key="pa_stock"
+            )
+            pa_sym = STOCKS.get(pa_stock, "^NSEI")
+        with pa2:
+            pa_direction = st.selectbox(
+                "Alert when price",
+                ["Goes ABOVE", "Goes BELOW"],
+                key="pa_direction"
+            )
+        with pa3:
+            pa_price = st.number_input(
+                "Alert price (Rs)",
+                value=float(sig["cp"]) if sig else 0.0,
+                step=0.5,
+                min_value=0.0,
+                key="pa_price"
+            )
+        with pa4:
+            pa_note = st.text_input(
+                "Note (optional)",
+                placeholder="e.g. Breakout level",
+                key="pa_note"
+            )
+
+        if st.button(
+            "Set Alert",
+            type="primary",
+            key="pa_set",
+            use_container_width=True
+        ):
+            if "price_alerts" not in st.session_state:
+                st.session_state["price_alerts"] = []
+            st.session_state["price_alerts"].append({
+                "stock":     pa_stock,
+                "sym":       pa_sym,
+                "direction": pa_direction,
+                "price":     pa_price,
+                "note":      pa_note,
+                "triggered": False
+            })
+            st.success(
+                f"✅ Alert set — will notify when "
+                f"{pa_stock} {pa_direction.lower()} "
+                f"₹{pa_price:,.2f}"
+            )
+
+        # Show active alerts
+        alerts = st.session_state.get("price_alerts", [])
+        active = [a for a in alerts if not a["triggered"]]
+
+        if active:
+            st.markdown(f"**Active alerts ({len(active)})**")
+            for ai, alert in enumerate(active):
+                ac1, ac2, ac3 = st.columns([3,2,1])
+                ac1.markdown(
+                    f"**{alert['stock']}** — "
+                    f"{alert['direction']} ₹{alert['price']:,.2f}"
+                    + (f" — {alert['note']}" if alert['note'] else "")
+                )
+                # Check current price
+                _alp = live_price(alert["sym"])
+                if _alp["ok"]:
+                    ac2.markdown(
+                        f"Current: **₹{_alp['p']:,.2f}**"
+                    )
+                    # Check if triggered
+                    triggered = (
+                        (alert["direction"] == "Goes ABOVE" and
+                         _alp["p"] >= alert["price"]) or
+                        (alert["direction"] == "Goes BELOW" and
+                         _alp["p"] <= alert["price"])
+                    )
+                    if triggered and not alert["triggered"]:
+                        alert["triggered"] = True
+                        tok = st.session_state.get(
+                            "tg_token_saved", ""
+                        )
+                        cid = st.session_state.get(
+                            "tg_chat_saved", ""
+                        )
+                        msg = (
+                            f"🔔 PRICE ALERT — {alert['stock']}\n"
+                            f"Price {alert['direction'].lower()} "
+                            f"₹{alert['price']:,.2f}\n"
+                            f"Current price: ₹{_alp['p']:,.2f}\n"
+                            + (f"Note: {alert['note']}"
+                               if alert['note'] else "")
+                        )
+                        send_telegram(tok, cid, msg)
+                        st.success(
+                            f"🔔 Alert triggered! "
+                            f"{alert['stock']} hit ₹{alert['price']:,.2f}"
+                        )
+                if ac3.button(
+                    "Remove",
+                    key=f"pa_rm_{ai}",
+                    use_container_width=True
+                ):
+                    st.session_state["price_alerts"].pop(ai)
+                    st.rerun()
+        else:
+            st.caption("No active price alerts")
+
+        # Auto-check alerts every 2 min
+        if st.session_state.get("auto_rf"):
+            for alert in st.session_state.get(
+                "price_alerts", []
+            ):
+                if not alert["triggered"]:
+                    _alp2 = live_price(alert["sym"])
+                    if _alp2["ok"]:
+                        triggered2 = (
+                            (alert["direction"]=="Goes ABOVE" and
+                             _alp2["p"] >= alert["price"]) or
+                            (alert["direction"]=="Goes BELOW" and
+                             _alp2["p"] <= alert["price"])
+                        )
+                        if triggered2:
+                            alert["triggered"] = True
+                            tok2 = st.session_state.get(
+                                "tg_token_saved",""
+                            )
+                            cid2 = st.session_state.get(
+                                "tg_chat_saved",""
+                            )
+                            msg2 = (
+                                f"🔔 ALERT — {alert['stock']}\n"
+                                f"{alert['direction']} "
+                                f"₹{alert['price']:,.2f}\n"
+                                f"Now at ₹{_alp2['p']:,.2f}"
+                            )
+                            send_telegram(tok2, cid2, msg2)
+
 
 # ╔══════════════════════════════════════════════════════╗
 # ║  TAB 5 — NEWS & EVENTS                              ║

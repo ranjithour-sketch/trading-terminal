@@ -1549,15 +1549,23 @@ def live_price(sym: str) -> dict:
                     "source":"yahoo"}
     return _yahoo_price(sym)
 
-@st.cache_data(ttl=3600)
 def get_kite_instruments(_token: str = "") -> dict:
     """
-    Cache NSE instruments list for 1 hour.
-    _token parameter busts cache when session changes.
+    Cache NSE instruments in st.session_state.
+    session_state persists across Streamlit reruns unlike globals.
     Returns dict: {tradingsymbol: instrument_token}
     """
     if not _token or not KITE_AVAILABLE or not KITE_API_KEY:
         return {}
+
+    # Check if we already have instruments for this token
+    cached_token = st.session_state.get("kite_inst_token", "")
+    cached_map   = st.session_state.get("kite_inst_map", {})
+
+    if cached_token == _token and cached_map:
+        return cached_map
+
+    # Fetch fresh from Kite
     try:
         kite_inst = KiteConnect(api_key=KITE_API_KEY)
         kite_inst.set_access_token(_token)
@@ -1566,7 +1574,10 @@ def get_kite_instruments(_token: str = "") -> dict:
             inst["tradingsymbol"]: inst["instrument_token"]
             for inst in instruments
         }
-        st.session_state["kite_instruments_count"] = len(result)
+        # Save to session state — persists across reruns
+        st.session_state["kite_inst_map"]   = result
+        st.session_state["kite_inst_token"] = _token
+        st.session_state["kite_inst_count"] = len(result)
         return result
     except Exception as e:
         st.session_state["kite_inst_error"] = str(e)
@@ -1829,11 +1840,33 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
         obv_bull = float(obv.iloc[-1]) > float(obv.iloc[-5])
 
         # ── CPR (Central Pivot Range) ─────────────────────
-        # Uses previous day candle for CPR calculation
-        # If intraday tf: use previous completed session
-        prev_h = float(h.iloc[-2])
-        prev_l = float(l.iloc[-2])
-        prev_c = float(c.iloc[-2])
+        # MUST use previous FULL DAY data for CPR
+        # Using previous candle is wrong for intraday charts
+        try:
+            # Group candles by date and get previous day OHLC
+            df_daily = df.copy()
+            df_daily.index = pd.to_datetime(df_daily.index)
+            daily_grp = df_daily.resample("1D").agg({
+                "High":  "max",
+                "Low":   "min",
+                "Close": "last",
+                "Open":  "first"
+            }).dropna()
+
+            if len(daily_grp) >= 2:
+                # Use yesterday's full day data
+                prev_h = float(daily_grp["High"].iloc[-2])
+                prev_l = float(daily_grp["Low"].iloc[-2])
+                prev_c = float(daily_grp["Close"].iloc[-2])
+            else:
+                # Fallback: use last 20 candles range
+                prev_h = float(h.tail(20).max())
+                prev_l = float(l.tail(20).min())
+                prev_c = float(c.iloc[-1])
+        except Exception:
+            prev_h = float(h.tail(20).max())
+            prev_l = float(l.tail(20).min())
+            prev_c = float(c.iloc[-1])
 
         cpr_pivot = round((prev_h + prev_l + prev_c) / 3, 2)
         cpr_bc    = round((prev_h + prev_l) / 2, 2)
@@ -4222,14 +4255,46 @@ with T3:
                 st.caption("No results found")
 
     _kite_scan = kite_is_connected()
+    _cur_tok   = st.session_state.get("kite_access_token","")
+    _inst_map  = st.session_state.get("kite_inst_map",{})
+    _inst_err  = st.session_state.get("kite_inst_error","")
+
     if _kite_scan:
-        st.success(
-            "⚡ Kite LIVE connected — Scanner using real-time candles"
-        )
+        if _inst_map:
+            st.success(
+                f"⚡ Kite LIVE — Real-time candles active. "
+                f"{len(_inst_map):,} instruments loaded."
+            )
+        else:
+            st.warning(
+                "⚡ Kite connected but instruments not loaded yet. "
+                "Click the button below to load instruments first."
+                + (f" Error: {_inst_err}" if _inst_err else "")
+            )
+            if st.button(
+                "Load Kite Instruments (required for live data)",
+                key="load_instruments",
+                type="primary"
+            ):
+                with st.spinner(
+                    "Loading NSE instruments from Kite (~20 seconds)..."
+                ):
+                    result = get_kite_instruments(_cur_tok)
+                if result:
+                    st.success(
+                        f"✅ {len(result):,} instruments loaded! "
+                        "Scanner will now use live data."
+                    )
+                    st.rerun()
+                else:
+                    st.error(
+                        "Failed to load instruments. "
+                        "Check Kite connection and try again."
+                    )
     else:
         st.warning(
             "📊 Yahoo Finance data (15-min delay) — "
-            "Login with Zerodha Kite in sidebar for live scanner signals"
+            "Login with Zerodha Kite in sidebar for live signals"
         )
     st.caption(
         "Scans stocks simultaneously across sectors. "
@@ -4661,6 +4726,69 @@ with T3:
                 reward = abs(t1_v - sig["cp"])
                 rr     = round(reward/(risk+0.001), 2)
 
+                # ── Fix 1: Skip if R:R < 1.5 ──────────────
+                if rr < 1.5:
+                    continue
+
+                # CPR is informational only — not used as filter
+                # CPR from previous day may not match intraday moves
+                cpr_pos  = sig.get("cpr_position","INSIDE")
+                cpr_bias = sig.get("cpr_bias","Sideways")
+
+                # ── Fix 3: Confidence scoring ──────────────
+                conflicts = 0
+                confirms  = 0
+
+                # Check Supertrend agreement
+                st_bull = sig.get("st_bull", True)
+                if direction == "UPTREND":
+                    if st_bull:
+                        confirms += 1
+                    else:
+                        conflicts += 1
+                else:
+                    if not st_bull:
+                        confirms += 1
+                    else:
+                        conflicts += 1
+
+                # Check RSI agreement
+                rsi_v = sig["rv"]
+                if direction == "UPTREND":
+                    if 50 <= rsi_v <= 75:
+                        confirms += 1
+                    elif rsi_v < 40 or rsi_v > 80:
+                        conflicts += 1
+                else:
+                    if 25 <= rsi_v <= 50:
+                        confirms += 1
+                    elif rsi_v > 60 or rsi_v < 20:
+                        conflicts += 1
+
+                # Check MACD agreement
+                if direction == "UPTREND":
+                    if sig.get("macd_bull", False):
+                        confirms += 1
+                    else:
+                        conflicts += 1
+                else:
+                    if not sig.get("macd_bull", True):
+                        confirms += 1
+                    else:
+                        conflicts += 1
+
+                # Skip if too many conflicts
+                if conflicts >= 2:
+                    continue
+
+                # Confidence label
+                if confirms >= 3 and conflicts == 0:
+                    confidence = "HIGH"
+                elif confirms >= 2 and conflicts <= 1:
+                    confidence = "MEDIUM"
+                else:
+                    confidence = "LOW"
+
                 # Combined score
                 combined = round(
                     best*0.6 + hist["score"]*0.4, 1
@@ -4708,6 +4836,10 @@ with T3:
                     "CPR_Type":    sig.get("cpr_type","—"),
                     "CPR_Pivot":   sig.get("cpr_pivot",0),
                     "Virgin_CPR":  sig.get("virgin_cpr",False),
+                    # Confidence
+                    "Confidence":  confidence,
+                    "Confirms":    confirms,
+                    "Conflicts":   conflicts,
                 }
                 results.append(result)
 
@@ -4828,7 +4960,29 @@ with T3:
                     f"<b>{r['OptType']}</b> | ATM ✅ {r['ATM']} | ITM {r['ITM']} | OTM {r['OTM']}"
                     f"{'  ✨ Virgin CPR' if r.get('Virgin_CPR') else ''}"
                     f" | CPR: Price {r.get('CPR_Pos','—')}</div>"
-                    f"</div>",
+                    + (
+                        "<div style='background:#f0fdf4;border-left:3px solid #16a34a;"
+                        "border-radius:0 6px 6px 0;padding:6px 12px;"
+                        "font-size:11px;color:#166534;margin-bottom:6px'>"
+                        "✅ CPR confirms — trade with full confidence</div>"
+                        if (
+                            (r.get("CPR_Pos")=="ABOVE" and r["Direction"]=="UPTREND") or
+                            (r.get("CPR_Pos")=="BELOW" and r["Direction"]=="DOWNTREND")
+                        ) else
+                        "<div style='background:#fef2f2;border-left:3px solid #dc2626;"
+                        "border-radius:0 6px 6px 0;padding:6px 12px;"
+                        "font-size:11px;color:#991b1b;margin-bottom:6px'>"
+                        "⚠️ CPR conflicts with signal — consider skipping or reduce size</div>"
+                        if (
+                            (r.get("CPR_Pos")=="BELOW" and r["Direction"]=="UPTREND") or
+                            (r.get("CPR_Pos")=="ABOVE" and r["Direction"]=="DOWNTREND")
+                        ) else
+                        "<div style='background:#fffbeb;border-left:3px solid #f59e0b;"
+                        "border-radius:0 6px 6px 0;padding:6px 12px;"
+                        "font-size:11px;color:#92400e;margin-bottom:6px'>"
+                        "⚠️ Price inside CPR — choppy zone, trade with smaller size</div>"
+                    )
+                    + f"</div>",
                     unsafe_allow_html=True
                 )
                 bc1, bc2, bc3 = st.columns(3)
@@ -5364,6 +5518,24 @@ with T3:
                     arr      = "▲" if r["Change%"] >= 0 else "▼"
                     border_col = "#86efac" if r["Direction"]=="UPTREND" else "#fca5a5"
 
+                    # Confidence badge
+                    conf = r.get("Confidence","MEDIUM")
+                    conf_col = (
+                        "#16a34a" if conf=="HIGH"
+                        else "#d97706" if conf=="MEDIUM"
+                        else "#dc2626"
+                    )
+                    conf_bg = (
+                        "#f0fdf4" if conf=="HIGH"
+                        else "#fffbeb" if conf=="MEDIUM"
+                        else "#fef2f2"
+                    )
+                    conf_icon = (
+                        "🔥" if conf=="HIGH"
+                        else "⚡" if conf=="MEDIUM"
+                        else "⚠️"
+                    )
+
                     st.markdown(
                         f"<div style='background:#ffffff;border:1.5px solid {border_col};"
                         f"border-radius:12px;padding:16px 18px;margin-bottom:10px'>"
@@ -5372,6 +5544,9 @@ with T3:
                         f"<span style='font-size:17px;font-weight:700;color:#1e293b'>{r['Stock']}</span>"
                         f"<span style='background:{bg_light};color:{dir_col};padding:4px 14px;"
                         f"border-radius:20px;font-size:13px;font-weight:700'>{r['Action']}</span>"
+                        f"<span style='background:{conf_bg};color:{conf_col};"
+                        f"padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600'>"
+                        f"{conf_icon} {conf} CONFIDENCE</span>"
                         f"<span style='font-size:12px;color:#64748b'>{r['Reliability']}</span>"
                         f"</div>"
                         f"<div style='display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px'>"

@@ -1866,6 +1866,13 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
         adxv = float(adx.iloc[-1])
         vwv  = float(vwap.iloc[-1])
         atrv = float(atr.iloc[-1])
+        # Validate ATR — must be positive and reasonable
+        # If NaN or zero or negative — use 1% of price as fallback
+        if not atrv or atrv <= 0 or atrv != atrv:  # NaN check
+            atrv = round(cp * 0.01, 2)
+        # ATR should not exceed 5% of price (sanity check)
+        if atrv > cp * 0.05:
+            atrv = round(cp * 0.015, 2)
         cmfv = float(cmf.iloc[-1])
         bbup = float(bbu.iloc[-1])
         bblw = float(bbl.iloc[-1])
@@ -2085,32 +2092,40 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
         else:
             entry_short = round(e9v, 2) # Wait for price to reach EMA9
 
-        # SL = 1.0× ATR below entry (CE) or above entry (PE)
-        sl_long   = round(entry_long  - atrv * 1.0, 2)
-        sl_short  = round(entry_short + atrv * 1.0, 2)
+        # ── SL and Targets — always validated ─────────────
+        # Use ATR for SL distance
+        sl_dist   = max(atrv * 1.0, cp * 0.005)  # min 0.5% of price
 
-        # Safety check — SL must be correct side of entry
-        if sl_long  >= entry_long:
-            sl_long  = round(entry_long  * 0.985, 2)
-        if sl_short <= entry_short:
+        # CE: SL MUST be below entry, Targets MUST be above entry
+        sl_long   = round(entry_long - sl_dist, 2)
+        tgt1      = round(entry_long + sl_dist * 1.5, 2)  # R:R 1.5:1
+        tgt2      = round(entry_long + sl_dist * 2.5, 2)  # R:R 2.5:1
+        tgt3      = round(entry_long + sl_dist * 4.0, 2)  # R:R 4.0:1
+
+        # PE: SL MUST be above entry, Targets MUST be below entry
+        sl_short  = round(entry_short + sl_dist, 2)
+        tgt1s     = round(entry_short - sl_dist * 1.5, 2)
+        tgt2s     = round(entry_short - sl_dist * 2.5, 2)
+        tgt3s     = round(entry_short - sl_dist * 4.0, 2)
+
+        # ── Final hard validation ────────────────────────
+        # CE checks
+        assert_ce_ok = sl_long < entry_long < tgt1
+        if not assert_ce_ok:
+            # Force correct values using percentage
+            sl_long = round(entry_long * 0.985, 2)
+            tgt1    = round(entry_long * 1.015, 2)
+            tgt2    = round(entry_long * 1.025, 2)
+            tgt3    = round(entry_long * 1.040, 2)
+
+        # PE checks
+        assert_pe_ok = sl_short > entry_short > tgt1s
+        if not assert_pe_ok:
+            # Force correct values using percentage
             sl_short = round(entry_short * 1.015, 2)
-
-        # Targets FROM ENTRY with increasing ATR multiples
-        # T1 = 1.5× ATR → R:R 1.5:1
-        # T2 = 2.5× ATR → R:R 2.5:1
-        # T3 = 4.0× ATR → R:R 4.0:1
-        tgt1      = round(entry_long  + atrv * 1.5, 2)
-        tgt2      = round(entry_long  + atrv * 2.5, 2)
-        tgt3      = round(entry_long  + atrv * 4.0, 2)
-        tgt1s     = round(entry_short - atrv * 1.5, 2)
-        tgt2s     = round(entry_short - atrv * 2.5, 2)
-        tgt3s     = round(entry_short - atrv * 4.0, 2)
-
-        # Final safety check on targets
-        if tgt1  <= entry_long:
-            tgt1  = round(entry_long  * 1.015, 2)
-        if tgt1s >= entry_short:
-            tgt1s = round(entry_short * 0.985, 2)
+            tgt1s    = round(entry_short * 0.985, 2)
+            tgt2s    = round(entry_short * 0.975, 2)
+            tgt3s    = round(entry_short * 0.960, 2)
 
         # Liquidity sweep
         rh20 = float(h.tail(20).max())
@@ -2350,6 +2365,8 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
             ce_checklist=ce_checklist, pe_checklist=pe_checklist,
             ce_pass=ce_pass, pe_pass=pe_pass,
             good_time=good_time, time_state=tt,
+            entry_long=entry_long, entry_short=entry_short,
+            sl_dist=sl_dist,
             # CPR
             cpr_pivot=cpr_pivot, cpr_tc=cpr_tc, cpr_bc=cpr_bc,
             cpr_width=cpr_width, cpr_width_pct=cpr_width_pct,
@@ -3519,9 +3536,9 @@ with T2:
                 "<div style='font-size:11px;color:#64748b;letter-spacing:1px;"
                 "text-transform:uppercase;margin-bottom:8px'>Entry Zone</div>"
                 f"<div style='color:#00ff88;font-size:22px;font-weight:700'>"
-                f"₹{sig['e9v']:,.2f}</div>"
+                f"₹{sig.get('entry_long', sig['e9v']):,.2f}</div>"
                 "<div style='color:#64748b;font-size:12px;margin-top:8px'>"
-                "Wait for pullback to EMA9<br>then enter on next green candle"
+                f"{'Enter at market price' if sig.get('entry_long', sig['e9v']) >= sig['cp']*0.999 else 'Wait for pullback to EMA9'}<br>then enter on next green candle"
                 "</div></div>",
                 unsafe_allow_html=True
             )
@@ -3553,8 +3570,14 @@ with T2:
                 unsafe_allow_html=True
             )
 
+        _ce_entry = sig.get("entry_long", sig["e9v"])
+        _ce_sl    = sig["sl_long"]
+        _ce_t1    = sig["tgt1"]
+        _ce_risk  = abs(_ce_entry - _ce_sl)
+        _ce_rew   = abs(_ce_t1   - _ce_entry)
+        _ce_rr    = round(_ce_rew / (_ce_risk + 0.001), 2)
         st.markdown(
-            f"**Risk-Reward:** {sig['rr_ratio']}:1 &nbsp;|&nbsp; "
+            f"**Risk-Reward:** {_ce_rr}:1 &nbsp;|&nbsp; "
             f"**ATR:** ₹{sig['atrv']:,.2f} &nbsp;|&nbsp; "
             f"**Support:** ₹{sig['sup']:,} &nbsp;|&nbsp; "
             f"**Resistance:** ₹{sig['res']:,}"
@@ -3586,9 +3609,9 @@ with T2:
                 "<div style='font-size:11px;color:#64748b;letter-spacing:1px;"
                 "text-transform:uppercase;margin-bottom:8px'>Entry Zone</div>"
                 f"<div style='color:#ff4455;font-size:22px;font-weight:700'>"
-                f"₹{sig['e9v']:,.2f}</div>"
+                f"₹{sig.get('entry_short', sig['e9v']):,.2f}</div>"
                 "<div style='color:#64748b;font-size:12px;margin-top:8px'>"
-                "Wait for bounce to EMA9<br>then enter on next red candle"
+                f"{'Enter at market price' if sig.get('entry_short', sig['e9v']) <= sig['cp']*1.001 else 'Wait for bounce to EMA9'}<br>then enter on next red candle"
                 "</div></div>",
                 unsafe_allow_html=True
             )
@@ -3620,8 +3643,14 @@ with T2:
                 unsafe_allow_html=True
             )
 
+        _pe_entry = sig.get("entry_short", sig["e9v"])
+        _pe_sl    = sig["sl_short"]
+        _pe_t1    = sig["tgt1s"]
+        _pe_risk  = abs(_pe_sl    - _pe_entry)
+        _pe_rew   = abs(_pe_entry - _pe_t1)
+        _pe_rr    = round(_pe_rew / (_pe_risk + 0.001), 2)
         st.markdown(
-            f"**Risk-Reward:** {sig['rr_ratio']}:1 &nbsp;|&nbsp; "
+            f"**Risk-Reward:** {_pe_rr}:1 &nbsp;|&nbsp; "
             f"**ATR:** ₹{sig['atrv']:,.2f} &nbsp;|&nbsp; "
             f"**Support:** ₹{sig['sup']:,} &nbsp;|&nbsp; "
             f"**Resistance:** ₹{sig['res']:,}"
@@ -5052,10 +5081,13 @@ with T3:
                         if direction == "UPTREND"
                         else sig["tgt3s"])
 
-                # Risk reward
-                risk   = abs(sig["cp"] - sl_v)
-                reward = abs(t1_v - sig["cp"])
-                rr     = round(reward/(risk+0.001), 2)
+                # Risk reward — calculated from ENTRY price
+                _entry_used = (sig["entry_long"]
+                               if direction == "UPTREND"
+                               else sig["entry_short"])
+                risk   = abs(_entry_used - sl_v)
+                reward = abs(t1_v - _entry_used)
+                rr     = round(reward / (risk + 0.001), 2)
 
                 # ── Fix 1: Skip if R:R below threshold ─────
                 _min_rr = float(st.session_state.get("min_rr_scan","1.0"))
@@ -5170,7 +5202,9 @@ with T3:
                     "RSI":         sig["rv"],
                     "ADX":         sig["adxv"],
                     "VolSurge":    sig["vsurge"],
-                    "Entry":       sig["e9v"],
+                    "Entry":       (sig.get("entry_long", sig["e9v"])
+                                   if direction == "UPTREND"
+                                   else sig.get("entry_short", sig["e9v"])),
                     "SL":          sl_v,
                     "T1":          t1_v,
                     "T2":          t2_v,

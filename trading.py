@@ -2068,14 +2068,36 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
         rr_ratio   = round(reward_pts/(risk_pts+0.001), 2)
 
         # ATR-based SL / targets
-        sl_long   = round(cp - atrv * 1.5, 2)
-        sl_short  = round(cp + atrv * 1.5, 2)
-        tgt1      = round(cp + atrv * 1.5, 2)
-        tgt2      = round(cp + atrv * 2.5, 2)
-        tgt3      = round(cp + atrv * 4.0, 2)
-        tgt1s     = round(cp - atrv * 1.5, 2)
-        tgt2s     = round(cp - atrv * 2.5, 2)
-        tgt3s     = round(cp - atrv * 4.0, 2)
+        # SL = 1.0 × ATR (tight stop)
+        # T1 = 1.5 × ATR → R:R 1.5:1
+        # T2 = 2.5 × ATR → R:R 2.5:1
+        # T3 = 4.0 × ATR → R:R 4.0:1
+        sl_atr    = atrv * 1.0   # 1.0× ATR for stop loss
+        sl_long   = round(cp - sl_atr, 2)
+        sl_short  = round(cp + sl_atr, 2)
+
+        # Validate SL makes sense
+        # CE: SL must be BELOW current price
+        # PE: SL must be ABOVE current price
+        if sl_long >= cp:
+            sl_long  = round(cp * 0.985, 2)  # 1.5% below
+        if sl_short <= cp:
+            sl_short = round(cp * 1.015, 2)  # 1.5% above
+
+        tgt1      = round(cp + atrv * 1.5, 2)   # R:R 1.5:1
+        tgt2      = round(cp + atrv * 2.5, 2)   # R:R 2.5:1
+        tgt3      = round(cp + atrv * 4.0, 2)   # R:R 4.0:1
+        tgt1s     = round(cp - atrv * 1.5, 2)   # PE T1
+        tgt2s     = round(cp - atrv * 2.5, 2)   # PE T2
+        tgt3s     = round(cp - atrv * 4.0, 2)   # PE T3
+
+        # Validate targets make sense
+        # CE: targets must be ABOVE current price
+        # PE: targets must be BELOW current price
+        if tgt1 <= cp:
+            tgt1  = round(cp * 1.015, 2)
+        if tgt1s >= cp:
+            tgt1s = round(cp * 0.985, 2)
 
         # Liquidity sweep
         rh20 = float(h.tail(20).max())

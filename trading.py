@@ -229,6 +229,7 @@ TAB_ROUTES = {
     "pulse":     7,
     "options":   8,
     "backtest":  9,
+    "hub":       10,
 }
 TAB_NAMES = [
     "📋 Watchlist",
@@ -241,8 +242,9 @@ TAB_NAMES = [
     "📊 Market Pulse",
     "🔗 Options Chain",
     "🧪 Backtest",
+    "🎯 Signal Hub",
 ]
-TAB_ICONS = ["📋","🎯","🔍","🤖","🏦","🧮","📰","📊","🔗","🧪"]
+TAB_ICONS = ["📋","🎯","🔍","🤖","🏦","🧮","📰","📊","🔗","🧪","🎯"]
 TAB_KEYS  = list(TAB_ROUTES.keys())
 
 # Read current tab from URL
@@ -2755,6 +2757,7 @@ with st.expander("Open any tab in a separate browser window"):
         ("📊 Market Pulse", "pulse",     "#0f766e"),
         ("🔗 Options",      "options",   "#7c3aed"),
         ("🧪 Backtest",     "backtest",  "#1d4ed8"),
+        ("🎯 Signal Hub",   "hub",       "#0f766e"),
     ]
     for idx, (lname, lkey, lcolor) in enumerate(link_data):
         col_idx = idx % 5
@@ -3048,7 +3051,7 @@ stick = st.session_state["st"]
 # ══════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════
-T1,T2,T3,T4,T5,T6,T7,T8,T9,T10 = st.tabs(TAB_NAMES)
+T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11 = st.tabs(TAB_NAMES)
 
 # ── Reusable inline stock search widget ──────────────────
 def inline_stock_search(tab_key: str):
@@ -8973,6 +8976,590 @@ with T10:
         is most reliable. 15m backtests have many false
         signals due to noise.
         """)
+
+
+# ╔══════════════════════════════════════════════════════╗
+# ║  TAB 11 — SIGNAL HUB                                ║
+# ╚══════════════════════════════════════════════════════╝
+with T11:
+    st.markdown("### 🎯 Signal Hub — All-in-One Analysis")
+    st.caption(
+        "Everything in one screen — Technical signals, "
+        "OI Change and IV Rank combined. "
+        "No more switching tabs."
+    )
+
+    # ── Step 1: Select Index and Stock ────────────────────
+    hub_c1, hub_c2, hub_c3 = st.columns(3)
+    with hub_c1:
+        hub_index = st.selectbox(
+            "Index for OI Analysis",
+            ["NIFTY","BANKNIFTY","FINNIFTY"],
+            key="hub_index"
+        )
+    with hub_c2:
+        hub_stock = st.text_input(
+            "Stock to analyse",
+            value=st.session_state.get("sn","NIFTY 50"),
+            key="hub_stock"
+        )
+        hub_sym = STOCKS.get(hub_stock, "^NSEI")
+    with hub_c3:
+        hub_tf = st.selectbox(
+            "Timeframe",
+            ["15m","30m","1h","1d"],
+            index=0,
+            key="hub_tf"
+        )
+
+    if st.button(
+        "🚀 Run Full Analysis",
+        type="primary",
+        key="hub_run",
+        use_container_width=True
+    ):
+        st.session_state["hub_run_flag"] = True
+
+    if not st.session_state.get("hub_run_flag"):
+        st.info(
+            "Select your index and stock above, "
+            "then click Run Full Analysis."
+        )
+    else:
+        with st.spinner("Loading all data simultaneously..."):
+            # Fetch all data in parallel
+            hub_lp   = live_price(hub_sym)
+            hub_df   = candles(hub_sym, hub_tf)
+            hub_sig  = None
+            if hub_df is not None and len(hub_df) >= 55:
+                hub_sig = compute_all(hub_df, hub_lp)
+
+            # ML
+            hub_ml_dir  = "UNKNOWN"
+            hub_ml_conf = 0
+            hub_ml_ok   = False
+            try:
+                hub_df_d = candles(hub_sym, "1d")
+                if hub_df_d is not None and len(hub_df_d) >= 100:
+                    hub_ml_model = train_model(hub_df_d)
+                    if hub_ml_model.get("ok"):
+                        hub_ml_pred = predict_next_move(
+                            hub_df_d, hub_ml_model
+                        )
+                        if hub_ml_pred and hub_ml_pred.get("ok"):
+                            hub_ml_dir  = hub_ml_pred["prediction"]
+                            hub_ml_conf = hub_ml_pred["confidence"]
+                            hub_ml_ok   = True
+            except Exception:
+                pass
+
+            # IV Rank
+            hub_iv = get_iv_rank()
+
+            # OI Change
+            hub_oi = get_oi_change_data(hub_index)
+
+            # MTF
+            hub_1h_dir = "UNKNOWN"
+            hub_1d_dir = "UNKNOWN"
+            try:
+                df_1h = candles(hub_sym, "1h")
+                if df_1h is not None and len(df_1h) >= 55:
+                    sig_1h = compute_all(df_1h, hub_lp)
+                    if sig_1h:
+                        hub_1h_dir = sig_1h["direction"]
+            except Exception:
+                pass
+            try:
+                df_1d = candles(hub_sym, "1d")
+                if df_1d is not None and len(df_1d) >= 55:
+                    sig_1d = compute_all(df_1d, hub_lp)
+                    if sig_1d:
+                        hub_1d_dir = sig_1d["direction"]
+            except Exception:
+                pass
+
+        if not hub_sig:
+            st.error(
+                f"Not enough data for {hub_stock}. "
+                "Try a different stock or timeframe."
+            )
+        else:
+            hub_dir   = hub_sig["direction"]
+            hub_score = max(
+                hub_sig["up_score"],
+                hub_sig["dn_score"]
+            )
+            hub_col = (
+                "#16a34a" if hub_dir=="UPTREND"
+                else "#dc2626" if hub_dir=="DOWNTREND"
+                else "#f59e0b"
+            )
+
+            # ══ SECTION 1: Overall verdict ════════════════
+            # Count confirmations
+            confirms = []
+            conflicts = []
+
+            # Technical score
+            if hub_score >= 7:
+                confirms.append(
+                    f"✅ Technical score {hub_score}/10"
+                )
+            else:
+                conflicts.append(
+                    f"❌ Technical score {hub_score}/10 — weak"
+                )
+
+            # ML
+            if hub_ml_ok and hub_ml_dir == hub_dir:
+                confirms.append(
+                    f"✅ ML confirms {hub_ml_dir} "
+                    f"({hub_ml_conf}%)"
+                )
+            elif hub_ml_ok:
+                conflicts.append(
+                    f"❌ ML says {hub_ml_dir} — conflicts"
+                )
+
+            # MTF
+            if hub_1h_dir == hub_dir:
+                confirms.append("✅ 1h timeframe agrees")
+            else:
+                conflicts.append(
+                    f"❌ 1h says {hub_1h_dir}"
+                )
+            if hub_1d_dir == hub_dir:
+                confirms.append("✅ 1d timeframe agrees")
+            else:
+                conflicts.append(
+                    f"❌ 1d says {hub_1d_dir}"
+                )
+
+            # OI Change
+            if hub_oi["ok"]:
+                oi_sig = hub_oi["oi_signal"]
+                if (hub_dir=="UPTREND" and
+                        "BULLISH" in oi_sig):
+                    confirms.append(
+                        f"✅ OI signal: {oi_sig}"
+                    )
+                elif (hub_dir=="DOWNTREND" and
+                        "BEARISH" in oi_sig):
+                    confirms.append(
+                        f"✅ OI signal: {oi_sig}"
+                    )
+                elif "UNWIND" in oi_sig or "MIXED" in oi_sig:
+                    conflicts.append(
+                        f"⚠️ OI signal: {oi_sig}"
+                    )
+                else:
+                    conflicts.append(
+                        f"❌ OI signal: {oi_sig} — conflicts"
+                    )
+
+            # IV Rank
+            if hub_iv["ok"]:
+                if hub_iv["iv_rank"] < 30:
+                    confirms.append(
+                        f"✅ IV Rank {hub_iv['iv_rank']} — "
+                        f"options cheap"
+                    )
+                elif hub_iv["iv_rank"] > 70:
+                    conflicts.append(
+                        f"⚠️ IV Rank {hub_iv['iv_rank']} — "
+                        f"options expensive"
+                    )
+                else:
+                    confirms.append(
+                        f"✅ IV Rank {hub_iv['iv_rank']} — "
+                        f"options fairly priced"
+                    )
+
+            # Supertrend
+            if hub_sig.get("st_bull") == (hub_dir=="UPTREND"):
+                confirms.append("✅ Supertrend confirms")
+            else:
+                conflicts.append("❌ Supertrend conflicts")
+
+            # CPR
+            cpr_pos = hub_sig.get("cpr_position","INSIDE")
+            if (hub_dir=="UPTREND" and cpr_pos=="ABOVE"):
+                confirms.append("✅ Price above CPR")
+            elif (hub_dir=="DOWNTREND" and cpr_pos=="BELOW"):
+                confirms.append("✅ Price below CPR")
+            elif cpr_pos == "INSIDE":
+                conflicts.append("⚠️ Price inside CPR")
+
+            # Final grade
+            total   = len(confirms) + len(conflicts)
+            conf_ct = len(confirms)
+
+            if conf_ct >= 7:
+                grade     = "💎 DIAMOND"
+                grade_col = "#7c3aed"
+                grade_bg  = "linear-gradient(135deg,#1e1b4b,#3730a3)"
+                grade_txt = "#ffffff"
+                action    = "ENTER TRADE"
+            elif conf_ct >= 5:
+                grade     = "🔥 STRONG"
+                grade_col = "#16a34a"
+                grade_bg  = "#f0fdf4"
+                grade_txt = "#166534"
+                action    = "ENTER WITH NORMAL SIZE"
+            elif conf_ct >= 3:
+                grade     = "⚡ MODERATE"
+                grade_col = "#d97706"
+                grade_bg  = "#fffbeb"
+                grade_txt = "#92400e"
+                action    = "ENTER WITH HALF SIZE"
+            else:
+                grade     = "⚠️ WEAK"
+                grade_col = "#dc2626"
+                grade_bg  = "#fef2f2"
+                grade_txt = "#991b1b"
+                action    = "DO NOT TRADE"
+
+            # ── BIG VERDICT BANNER ─────────────────────────
+            st.markdown(
+                f"<div style='background:{grade_bg};"
+                f"border-radius:16px;padding:24px;"
+                f"text-align:center;margin-bottom:16px'>"
+                f"<div style='font-size:36px;font-weight:700;"
+                f"color:{grade_txt}'>{grade}</div>"
+                f"<div style='font-size:18px;color:{grade_txt};"
+                f"margin-top:8px;font-weight:600'>"
+                f"{hub_stock} — {hub_dir}"
+                f"</div>"
+                f"<div style='font-size:16px;color:{grade_txt};"
+                f"margin-top:6px'>{action}</div>"
+                f"<div style='font-size:13px;color:{grade_txt};"
+                f"opacity:0.8;margin-top:8px'>"
+                f"{conf_ct} of {total} factors confirm"
+                f"</div></div>",
+                unsafe_allow_html=True
+            )
+
+            # ── 3 COLUMN LAYOUT ────────────────────────────
+            col_tech, col_oi, col_iv = st.columns(3)
+
+            # Column 1: Technical + ML + MTF
+            with col_tech:
+                st.markdown(
+                    "<div style='background:#ffffff;"
+                    "border:1px solid #e2e8f0;"
+                    "border-radius:12px;padding:16px;"
+                    "height:100%'>"
+                    "<div style='font-size:13px;font-weight:700;"
+                    "color:#374151;margin-bottom:12px;"
+                    "text-transform:uppercase;letter-spacing:1px'>"
+                    "📊 Technical Analysis</div>",
+                    unsafe_allow_html=True
+                )
+                # Score
+                st.markdown(
+                    f"<div style='text-align:center;"
+                    f"padding:12px;background:#f8fafc;"
+                    f"border-radius:8px;margin-bottom:10px'>"
+                    f"<div style='font-size:11px;color:#64748b'>"
+                    f"Signal Score</div>"
+                    f"<div style='font-size:36px;font-weight:700;"
+                    f"color:{hub_col}'>{hub_score}/10</div>"
+                    f"<div style='font-size:13px;color:{hub_col};"
+                    f"font-weight:600'>{hub_dir}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+                # Key indicators
+                indicators = [
+                    ("RSI", f"{hub_sig['rv']:.0f}",
+                     "#16a34a" if 50<hub_sig['rv']<75 else "#dc2626"),
+                    ("Supertrend",
+                     "BUY" if hub_sig.get("st_bull") else "SELL",
+                     "#16a34a" if hub_sig.get("st_bull") else "#dc2626"),
+                    ("CPR", hub_sig.get("cpr_position","—"),
+                     "#16a34a" if hub_sig.get("cpr_position")=="ABOVE"
+                     else "#dc2626" if hub_sig.get("cpr_position")=="BELOW"
+                     else "#f59e0b"),
+                    ("VWAP",
+                     "Above" if hub_sig["cp"]>hub_sig["vwv"]
+                     else "Below",
+                     "#16a34a" if hub_sig["cp"]>hub_sig["vwv"]
+                     else "#dc2626"),
+                    ("ML (1d)", hub_ml_dir,
+                     "#16a34a" if hub_ml_dir=="UPTREND"
+                     else "#dc2626" if hub_ml_dir=="DOWNTREND"
+                     else "#f59e0b"),
+                    ("1h TF", hub_1h_dir,
+                     "#16a34a" if hub_1h_dir==hub_dir
+                     else "#dc2626"),
+                    ("1d TF", hub_1d_dir,
+                     "#16a34a" if hub_1d_dir==hub_dir
+                     else "#dc2626"),
+                ]
+                for ind_name, ind_val, ind_col in indicators:
+                    st.markdown(
+                        f"<div style='display:flex;"
+                        f"justify-content:space-between;"
+                        f"padding:5px 0;border-bottom:"
+                        f"1px solid #f1f5f9;font-size:12px'>"
+                        f"<span style='color:#64748b'>"
+                        f"{ind_name}</span>"
+                        f"<span style='font-weight:600;"
+                        f"color:{ind_col}'>{ind_val}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            # Column 2: OI Change
+            with col_oi:
+                st.markdown(
+                    "<div style='background:#ffffff;"
+                    "border:1px solid #e2e8f0;"
+                    "border-radius:12px;padding:16px;"
+                    "height:100%'>"
+                    "<div style='font-size:13px;font-weight:700;"
+                    "color:#374151;margin-bottom:12px;"
+                    "text-transform:uppercase;letter-spacing:1px'>"
+                    "⚡ OI Change Analysis</div>",
+                    unsafe_allow_html=True
+                )
+                if hub_oi["ok"]:
+                    _oic = hub_oi["oi_color"]
+                    st.markdown(
+                        f"<div style='text-align:center;"
+                        f"padding:12px;background:{_oic}22;"
+                        f"border-radius:8px;margin-bottom:10px'>"
+                        f"<div style='font-size:18px;"
+                        f"font-weight:700;color:{_oic}'>"
+                        f"{hub_oi['oi_signal']}</div>"
+                        f"<div style='font-size:11px;color:#64748b;"
+                        f"margin-top:4px'>"
+                        f"{hub_oi['oi_advice']}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+                    oi_levels = [
+                        ("Resistance (Max Call OI)",
+                         f"₹{hub_oi['max_call_oi_strike']:,}",
+                         "#dc2626"),
+                        ("Support (Max Put OI)",
+                         f"₹{hub_oi['max_put_oi_strike']:,}",
+                         "#16a34a"),
+                        ("Call OI Build",
+                         f"₹{hub_oi['max_call_chg_strike']:,}",
+                         "#dc2626"),
+                        ("Put OI Build",
+                         f"₹{hub_oi['max_put_chg_strike']:,}",
+                         "#16a34a"),
+                        ("Total Call OI Chg",
+                         f"{hub_oi['total_call_oi_chg']:+,}",
+                         "#16a34a" if hub_oi["total_call_oi_chg"]<0
+                         else "#dc2626"),
+                        ("Total Put OI Chg",
+                         f"{hub_oi['total_put_oi_chg']:+,}",
+                         "#16a34a" if hub_oi["total_put_oi_chg"]>0
+                         else "#dc2626"),
+                        ("Spot Price",
+                         f"₹{hub_oi['spot']:,.0f}",
+                         "#374151"),
+                        ("ATM Strike",
+                         f"₹{hub_oi['atm']:,}",
+                         "#7c3aed"),
+                    ]
+                    for _n, _v, _c in oi_levels:
+                        st.markdown(
+                            f"<div style='display:flex;"
+                            f"justify-content:space-between;"
+                            f"padding:5px 0;border-bottom:"
+                            f"1px solid #f1f5f9;font-size:12px'>"
+                            f"<span style='color:#64748b'>{_n}"
+                            f"</span>"
+                            f"<span style='font-weight:600;"
+                            f"color:{_c}'>{_v}</span>"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+                else:
+                    st.warning(
+                        "OI data unavailable. "
+                        "Try during market hours."
+                    )
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            # Column 3: IV Rank + Entry levels
+            with col_iv:
+                st.markdown(
+                    "<div style='background:#ffffff;"
+                    "border:1px solid #e2e8f0;"
+                    "border-radius:12px;padding:16px;"
+                    "height:100%'>"
+                    "<div style='font-size:13px;font-weight:700;"
+                    "color:#374151;margin-bottom:12px;"
+                    "text-transform:uppercase;letter-spacing:1px'>"
+                    "📈 IV Rank + Entry Levels</div>",
+                    unsafe_allow_html=True
+                )
+                if hub_iv["ok"]:
+                    _ivc = hub_iv["color"]
+                    _ivb = hub_iv["bg"]
+                    st.markdown(
+                        f"<div style='text-align:center;"
+                        f"padding:12px;background:{_ivb};"
+                        f"border-radius:8px;margin-bottom:10px'>"
+                        f"<div style='font-size:11px;"
+                        f"color:#64748b'>IV Rank</div>"
+                        f"<div style='font-size:36px;"
+                        f"font-weight:700;color:{_ivc}'>"
+                        f"{hub_iv['iv_rank']}</div>"
+                        f"<div style='font-size:13px;"
+                        f"color:{_ivc};font-weight:600'>"
+                        f"{hub_iv['signal']}</div>"
+                        f"<div style='font-size:11px;"
+                        f"color:#64748b;margin-top:4px'>"
+                        f"{hub_iv['advice']}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+
+                # Entry / SL / Target
+                _hub_entry = hub_sig.get(
+                    "entry_long" if hub_dir=="UPTREND"
+                    else "entry_short",
+                    hub_sig["e9v"]
+                )
+                _hub_sl = (
+                    hub_sig["sl_long"]
+                    if hub_dir=="UPTREND"
+                    else hub_sig["sl_short"]
+                )
+                _hub_t1 = (
+                    hub_sig["tgt1"]
+                    if hub_dir=="UPTREND"
+                    else hub_sig["tgt1s"]
+                )
+                _hub_t2 = (
+                    hub_sig["tgt2"]
+                    if hub_dir=="UPTREND"
+                    else hub_sig["tgt2s"]
+                )
+                _hub_rr = round(
+                    abs(_hub_t1 - _hub_entry) /
+                    (abs(_hub_entry - _hub_sl) + 0.001),
+                    2
+                )
+
+                levels = [
+                    ("Current Price",
+                     f"₹{hub_sig['cp']:,.2f}",
+                     "#374151"),
+                    ("Entry Zone",
+                     f"₹{_hub_entry:,.2f}",
+                     "#16a34a"),
+                    ("Stop Loss",
+                     f"₹{_hub_sl:,.2f}",
+                     "#dc2626"),
+                    ("Target 1",
+                     f"₹{_hub_t1:,.2f}",
+                     "#1d4ed8"),
+                    ("Target 2",
+                     f"₹{_hub_t2:,.2f}",
+                     "#1d4ed8"),
+                    ("R:R Ratio",
+                     f"{_hub_rr}:1",
+                     "#16a34a" if _hub_rr>=1.5 else "#dc2626"),
+                    ("ATR",
+                     f"₹{hub_sig['atrv']:,.2f}",
+                     "#374151"),
+                ]
+                for _n, _v, _c in levels:
+                    st.markdown(
+                        f"<div style='display:flex;"
+                        f"justify-content:space-between;"
+                        f"padding:5px 0;border-bottom:"
+                        f"1px solid #f1f5f9;font-size:12px'>"
+                        f"<span style='color:#64748b'>{_n}</span>"
+                        f"<span style='font-weight:600;"
+                        f"color:{_c}'>{_v}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            # ── Confirmation checklist ─────────────────────
+            st.markdown("---")
+            chk1, chk2 = st.columns(2)
+            with chk1:
+                st.markdown(
+                    f"<div style='font-size:13px;font-weight:700;"
+                    f"color:#16a34a;margin-bottom:8px'>"
+                    f"✅ Confirming factors "
+                    f"({len(confirms)})</div>",
+                    unsafe_allow_html=True
+                )
+                for c in confirms:
+                    st.markdown(
+                        f"<div style='background:#f0fdf4;"
+                        f"border-left:3px solid #86efac;"
+                        f"padding:6px 12px;margin:3px 0;"
+                        f"border-radius:0 6px 6px 0;"
+                        f"font-size:12px;color:#166534'>"
+                        f"{c}</div>",
+                        unsafe_allow_html=True
+                    )
+            with chk2:
+                st.markdown(
+                    f"<div style='font-size:13px;font-weight:700;"
+                    f"color:#dc2626;margin-bottom:8px'>"
+                    f"❌ Conflicting factors "
+                    f"({len(conflicts)})</div>",
+                    unsafe_allow_html=True
+                )
+                for c in conflicts:
+                    st.markdown(
+                        f"<div style='background:#fef2f2;"
+                        f"border-left:3px solid #fca5a5;"
+                        f"padding:6px 12px;margin:3px 0;"
+                        f"border-radius:0 6px 6px 0;"
+                        f"font-size:12px;color:#991b1b'>"
+                        f"{c}</div>",
+                        unsafe_allow_html=True
+                    )
+
+            # ── Send to Telegram ───────────────────────────
+            st.markdown("---")
+            if tg_configured():
+                if st.button(
+                    "📱 Send Full Analysis to Telegram",
+                    key="hub_tg",
+                    type="primary",
+                    use_container_width=True
+                ):
+                    _tok = st.session_state.get(
+                        "tg_token_saved",""
+                    )
+                    _cid = st.session_state.get(
+                        "tg_chat_saved",""
+                    )
+                    _msg = (
+                        f"{grade} — {hub_stock}\n"
+                        f"{hub_dir} | Score {hub_score}/10\n"
+                        f"ML: {hub_ml_dir} ({hub_ml_conf}%)\n"
+                        f"OI: {hub_oi.get('oi_signal','—')}\n"
+                        f"IV Rank: {hub_iv.get('iv_rank','—')} "
+                        f"({hub_iv.get('signal','—')})\n"
+                        f"Entry: Rs{_hub_entry:,.0f} | "
+                        f"SL: Rs{_hub_sl:,.0f}\n"
+                        f"T1: Rs{_hub_t1:,.0f} | "
+                        f"R:R {_hub_rr}:1\n"
+                        f"Confirms: {len(confirms)}/{total} | "
+                        f"Action: {action}"
+                    )
+                    if send_telegram(_tok, _cid, _msg):
+                        st.success("✅ Full analysis sent!")
+                    else:
+                        st.error("❌ Failed to send")
 
 
 # ── Auto refresh ──────────────────────────────────────────

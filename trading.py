@@ -255,6 +255,232 @@ _default_tab = TAB_ROUTES.get(_tab_key, 0)
 # ══════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=300)
+def get_iv_rank(symbol: str = "NIFTY") -> dict:
+    """
+    Calculate IV Rank for NIFTY/BANKNIFTY.
+    IV Rank = (Current IV - 52w Low IV) / (52w High IV - 52w Low IV) * 100
+    Uses VIX as proxy for NIFTY IV.
+    IV Rank > 70 = expensive options (avoid buying)
+    IV Rank < 30 = cheap options (good time to buy)
+    """
+    try:
+        # Use India VIX as IV proxy
+        vix_tk = yf.Ticker("^INDIAVIX")
+        hist   = vix_tk.history(period="1y")
+        if hist.empty:
+            return {"ok": False}
+
+        current_iv = float(hist["Close"].iloc[-1])
+        high_52w   = float(hist["Close"].max())
+        low_52w    = float(hist["Close"].min())
+        iv_range   = high_52w - low_52w
+
+        if iv_range <= 0:
+            return {"ok": False}
+
+        iv_rank    = round(
+            (current_iv - low_52w) / iv_range * 100, 1
+        )
+        iv_pct     = round(
+            len(hist[hist["Close"] <= current_iv]) /
+            len(hist) * 100, 1
+        )
+
+        if iv_rank > 70:
+            signal = "EXPENSIVE"
+            advice = "Options overpriced — avoid buying CE/PE now"
+            color  = "#dc2626"
+            bg     = "#fef2f2"
+        elif iv_rank < 30:
+            signal = "CHEAP"
+            advice = "Options cheap — good time to buy CE/PE"
+            color  = "#16a34a"
+            bg     = "#f0fdf4"
+        else:
+            signal = "MODERATE"
+            advice = "Options fairly priced — trade normally"
+            color  = "#d97706"
+            bg     = "#fffbeb"
+
+        return {
+            "ok":         True,
+            "current_iv": round(current_iv, 2),
+            "iv_rank":    iv_rank,
+            "iv_pct":     iv_pct,
+            "high_52w":   round(high_52w, 2),
+            "low_52w":    round(low_52w, 2),
+            "signal":     signal,
+            "advice":     advice,
+            "color":      color,
+            "bg":         bg,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@st.cache_data(ttl=120)
+def get_oi_change_data(symbol: str = "NIFTY") -> dict:
+    """
+    Get OI change data from NSE options chain.
+    OI change shows where money is flowing in real time.
+    Positive OI change at a strike = new positions being built.
+    Negative OI change = positions being closed (unwinding).
+    """
+    try:
+        session_ = requests.Session()
+        hdrs = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Accept": "application/json",
+            "Referer": "https://www.nseindia.com/"
+        }
+        session_.get(
+            "https://www.nseindia.com",
+            headers=hdrs, timeout=8
+        )
+        url = (
+            f"https://www.nseindia.com/api/option-chain-indices"
+            f"?symbol={symbol}"
+        )
+        r = session_.get(url, headers=hdrs, timeout=8)
+
+        if r.status_code != 200:
+            return {"ok": False}
+
+        data    = r.json()
+        records = data.get("records", {})
+        spot    = float(records.get("underlyingValue", 0))
+        oc_data = records.get("data", [])
+        expiries= records.get("expiryDates", [])
+
+        if not oc_data or not expiries:
+            return {"ok": False}
+
+        # Use nearest expiry
+        nearest_exp = expiries[0]
+        exp_data    = [
+            d for d in oc_data
+            if d.get("expiryDate") == nearest_exp
+        ]
+
+        # ATM strike
+        step = 50 if symbol == "NIFTY" else 100
+        atm  = round(spot / step) * step
+
+        # Build OI change analysis
+        strikes_data = []
+        total_call_oi_chg = 0
+        total_put_oi_chg  = 0
+
+        for item in exp_data:
+            strike = item.get("strikePrice", 0)
+            ce = item.get("CE", {})
+            pe = item.get("PE", {})
+
+            ce_oi     = int(ce.get("openInterest", 0) or 0)
+            ce_oi_chg = int(ce.get("changeinOpenInterest", 0) or 0)
+            ce_iv     = float(ce.get("impliedVolatility", 0) or 0)
+            ce_ltp    = float(ce.get("lastPrice", 0) or 0)
+
+            pe_oi     = int(pe.get("openInterest", 0) or 0)
+            pe_oi_chg = int(pe.get("changeinOpenInterest", 0) or 0)
+            pe_iv     = float(pe.get("impliedVolatility", 0) or 0)
+            pe_ltp    = float(pe.get("lastPrice", 0) or 0)
+
+            total_call_oi_chg += ce_oi_chg
+            total_put_oi_chg  += pe_oi_chg
+
+            strikes_data.append({
+                "strike":     strike,
+                "ce_oi":      ce_oi,
+                "ce_oi_chg":  ce_oi_chg,
+                "ce_iv":      round(ce_iv, 1),
+                "ce_ltp":     round(ce_ltp, 2),
+                "pe_oi":      pe_oi,
+                "pe_oi_chg":  pe_oi_chg,
+                "pe_iv":      round(pe_iv, 1),
+                "pe_ltp":     round(pe_ltp, 2),
+                "is_atm":     strike == atm,
+            })
+
+        # Sort by strike
+        strikes_data.sort(key=lambda x: x["strike"])
+
+        # Find max OI and max OI change strikes
+        if strikes_data:
+            max_call_oi_strike = max(
+                strikes_data, key=lambda x: x["ce_oi"]
+            )["strike"]
+            max_put_oi_strike  = max(
+                strikes_data, key=lambda x: x["pe_oi"]
+            )["strike"]
+            max_call_chg_strike= max(
+                strikes_data, key=lambda x: x["ce_oi_chg"]
+            )["strike"]
+            max_put_chg_strike = max(
+                strikes_data, key=lambda x: x["pe_oi_chg"]
+            )["strike"]
+        else:
+            max_call_oi_strike  = atm
+            max_put_oi_strike   = atm
+            max_call_chg_strike = atm
+            max_put_chg_strike  = atm
+
+        # OI change signal
+        pcr_chg = round(
+            abs(total_put_oi_chg) /
+            (abs(total_call_oi_chg) + 1), 2
+        )
+
+        if (total_call_oi_chg > 0 and
+                total_put_oi_chg > 0 and
+                total_put_oi_chg > total_call_oi_chg):
+            oi_signal = "BULLISH BUILD"
+            oi_color  = "#16a34a"
+            oi_advice = (
+                "Put writers building positions — "
+                "market expected to hold support"
+            )
+        elif (total_call_oi_chg > 0 and
+              total_call_oi_chg > total_put_oi_chg):
+            oi_signal = "BEARISH BUILD"
+            oi_color  = "#dc2626"
+            oi_advice = (
+                "Call writers building positions — "
+                "market expected to face resistance"
+            )
+        elif (total_call_oi_chg < 0 and
+              total_put_oi_chg < 0):
+            oi_signal = "UNWINDING"
+            oi_color  = "#f59e0b"
+            oi_advice = (
+                "Both CE and PE unwinding — "
+                "positions being closed, low conviction"
+            )
+        else:
+            oi_signal = "MIXED"
+            oi_color  = "#64748b"
+            oi_advice = "Mixed OI signals — wait for clarity"
+
+        return {
+            "ok":                 True,
+            "spot":               spot,
+            "atm":                atm,
+            "expiry":             nearest_exp,
+            "strikes":            strikes_data,
+            "total_call_oi_chg":  total_call_oi_chg,
+            "total_put_oi_chg":   total_put_oi_chg,
+            "pcr_chg":            pcr_chg,
+            "max_call_oi_strike": max_call_oi_strike,
+            "max_put_oi_strike":  max_put_oi_strike,
+            "max_call_chg_strike":max_call_chg_strike,
+            "max_put_chg_strike": max_put_chg_strike,
+            "oi_signal":          oi_signal,
+            "oi_color":           oi_color,
+            "oi_advice":          oi_advice,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@st.cache_data(ttl=300)
 def get_india_vix() -> dict:
     """Get India VIX from Yahoo Finance."""
     try:
@@ -4831,6 +5057,23 @@ with T3:
             f"Scores may differ. Change sidebar timeframe to {scan_tf} "
             f"to match."
         )
+
+    # IV Rank quick check before scanning
+    _iv_quick = get_iv_rank()
+    if _iv_quick["ok"]:
+        _iv_col = _iv_quick["color"]
+        _iv_bg  = _iv_quick["bg"]
+        st.markdown(
+            f"<div style='background:{_iv_bg};"
+            f"border:1px solid {_iv_col};"
+            f"border-radius:8px;padding:8px 16px;"
+            f"font-size:13px;margin-bottom:8px'>"
+            f"<b style='color:{_iv_col}'>IV Rank: "
+            f"{_iv_quick['iv_rank']} — {_iv_quick['signal']}</b>"
+            f" &nbsp;|&nbsp; {_iv_quick['advice']}"
+            f"</div>",
+            unsafe_allow_html=True
+        )
     st.caption(
         "Scanner uses the exact same scoring logic as Trade Setup. "
         "If a stock scores 7+ in Trade Setup on 15m — "
@@ -7824,6 +8067,76 @@ with T8:
             "Check internet connection or try refreshing."
         )
 
+    # ── IV Rank Section ───────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 📊 IV Rank — Are Options Cheap or Expensive?")
+    st.caption(
+        "IV Rank tells you if options are cheap or expensive "
+        "right now compared to the past year. "
+        "Always check before buying CE or PE."
+    )
+
+    iv_data = get_iv_rank()
+    if iv_data["ok"]:
+        iv1, iv2, iv3 = st.columns(3)
+        with iv1:
+            st.markdown(
+                f"<div style='background:{iv_data['bg']};"
+                f"border:2px solid {iv_data['color']};"
+                f"border-radius:14px;padding:20px;"
+                f"text-align:center'>"
+                f"<div style='font-size:12px;color:#64748b;"
+                f"text-transform:uppercase;letter-spacing:1px'>"
+                f"IV Rank</div>"
+                f"<div style='font-size:52px;font-weight:700;"
+                f"color:{iv_data['color']};line-height:1'>"
+                f"{iv_data['iv_rank']}</div>"
+                f"<div style='font-size:14px;font-weight:700;"
+                f"color:{iv_data['color']};margin-top:4px'>"
+                f"{iv_data['signal']}</div>"
+                f"<div style='font-size:12px;color:#64748b;"
+                f"margin-top:4px'>"
+                f"Current VIX: {iv_data['current_iv']}</div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+        with iv2:
+            st.markdown(
+                f"<div style='background:#f8fafc;"
+                f"border-radius:12px;padding:16px'>"
+                f"<div style='font-size:13px;font-weight:700;"
+                f"color:#374151;margin-bottom:10px'>"
+                f"52-Week Range</div>"
+                f"<div style='font-size:13px;color:#475569;"
+                f"line-height:2.2'>"
+                f"Current: <b>{iv_data['current_iv']}</b><br>"
+                f"52W High: <b>{iv_data['high_52w']}</b><br>"
+                f"52W Low: <b>{iv_data['low_52w']}</b><br>"
+                f"IV Percentile: <b>{iv_data['iv_pct']}%</b>"
+                f"</div></div>",
+                unsafe_allow_html=True
+            )
+        with iv3:
+            st.markdown(
+                f"<div style='background:{iv_data['bg']};"
+                f"border:1px solid {iv_data['color']};"
+                f"border-radius:12px;padding:16px'>"
+                f"<div style='font-size:13px;font-weight:700;"
+                f"color:{iv_data['color']};margin-bottom:8px'>"
+                f"Today's Advice</div>"
+                f"<div style='font-size:13px;color:#374151'>"
+                f"{iv_data['advice']}</div>"
+                f"<hr style='border-color:#e2e8f0;margin:10px 0'>"
+                f"<div style='font-size:12px;color:#64748b'>"
+                f"IV Rank > 70 = Expensive → sell options or avoid buying<br>"
+                f"IV Rank 30-70 = Fair → buy options normally<br>"
+                f"IV Rank < 30 = Cheap → best time to buy CE/PE"
+                f"</div></div>",
+                unsafe_allow_html=True
+            )
+    else:
+        st.info("IV Rank data unavailable. Check VIX connection.")
+
     # ── FII / DII Data ─────────────────────────────────────
     st.markdown("---")
     st.markdown("#### 🏦 FII / DII — Institutional Money Flow")
@@ -7926,13 +8239,13 @@ with T8:
 # ║  TAB 9 — OPTIONS CHAIN                              ║
 # ╚══════════════════════════════════════════════════════╝
 with T9:
-    st.markdown("### 🔗 Options Chain — NIFTY / BANKNIFTY")
+    st.markdown("### 🔗 Options Chain + OI Analysis")
     st.caption(
-        "Shows all CE and PE strikes with OI, change in OI and IV. "
-        "High Call OI = resistance. High Put OI = support."
+        "OI Change is the most powerful intraday options signal. "
+        "Where OI is being built = where institutions are positioned."
     )
 
-    oc1, oc2 = st.columns([2, 1])
+    oc1, oc2, oc3 = st.columns([2, 1, 1])
     with oc1:
         oc_symbol = st.selectbox(
             "Index",
@@ -7947,6 +8260,209 @@ with T9:
             use_container_width=True
         ):
             get_options_chain.clear()
+            get_oi_change_data.clear()
+    with oc3:
+        if st.button(
+            "Load OI Analysis",
+            key="oc_oi_load",
+            use_container_width=True
+        ):
+            get_oi_change_data.clear()
+
+    # ── OI Change Analysis ─────────────────────────────────
+    st.markdown("#### 📈 OI Change Analysis — Where is money flowing?")
+
+    oi_data = get_oi_change_data(oc_symbol)
+    if oi_data["ok"]:
+        # Signal banner
+        st.markdown(
+            f"<div style='background:{oi_data['oi_color']}22;"
+            f"border:2px solid {oi_data['oi_color']};"
+            f"border-radius:12px;padding:14px 20px;"
+            f"margin-bottom:12px'>"
+            f"<span style='font-size:18px;font-weight:700;"
+            f"color:{oi_data['oi_color']}'>"
+            f"⚡ {oi_data['oi_signal']}</span>"
+            f"<span style='font-size:13px;color:#475569;"
+            f"margin-left:16px'>{oi_data['oi_advice']}</span>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+        # Key levels
+        ok1, ok2, ok3, ok4 = st.columns(4)
+        ok1.metric(
+            "Max Call OI (Resistance)",
+            f"₹{oi_data['max_call_oi_strike']:,}",
+            help="Strongest resistance — institutions sold calls here"
+        )
+        ok2.metric(
+            "Max Put OI (Support)",
+            f"₹{oi_data['max_put_oi_strike']:,}",
+            help="Strongest support — institutions sold puts here"
+        )
+        ok3.metric(
+            "Max Call OI Build",
+            f"₹{oi_data['max_call_chg_strike']:,}",
+            help="Strike where most new call positions added today"
+        )
+        ok4.metric(
+            "Max Put OI Build",
+            f"₹{oi_data['max_put_chg_strike']:,}",
+            help="Strike where most new put positions added today"
+        )
+
+        # OI change totals
+        call_chg = oi_data["total_call_oi_chg"]
+        put_chg  = oi_data["total_put_oi_chg"]
+        cc = "#16a34a" if call_chg > 0 else "#dc2626"
+        pc = "#16a34a" if put_chg  > 0 else "#dc2626"
+
+        st.markdown(
+            f"<div style='background:#f8fafc;"
+            f"border-radius:10px;padding:12px 18px;"
+            f"font-size:13px;margin:8px 0'>"
+            f"Total Call OI Change: "
+            f"<b style='color:{cc}'>{call_chg:+,}</b> contracts &nbsp;|&nbsp; "
+            f"Total Put OI Change: "
+            f"<b style='color:{pc}'>{put_chg:+,}</b> contracts &nbsp;|&nbsp; "
+            f"Spot: ₹{oi_data['spot']:,.2f} &nbsp;|&nbsp; "
+            f"ATM: ₹{oi_data['atm']:,} &nbsp;|&nbsp; "
+            f"Expiry: {oi_data['expiry']}"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+        # OI Change interpretation guide
+        with st.expander("📖 How to read OI Change"):
+            st.markdown("""
+            | OI Change | Meaning | Signal |
+            |-----------|---------|--------|
+            | Call OI ↑ + Price ↑ | Short covering in calls | Bullish |
+            | Call OI ↑ + Price ↓ | New call writing (resistance) | Bearish |
+            | Put OI ↑ + Price ↓ | Short covering in puts | Bearish |
+            | Put OI ↑ + Price ↑ | New put writing (support) | Bullish |
+            | Call OI ↓ + Price ↑ | Call unwinding | Mildly bullish |
+            | Put OI ↓ + Price ↓ | Put unwinding | Mildly bearish |
+
+            **Key rule:** If Put OI is building at a strike BELOW current price
+            = strong support at that level. Institutions are selling puts there
+            = they believe price will NOT fall below that strike.
+            """)
+
+        # Near ATM OI Change table
+        st.markdown("#### OI Change near ATM strikes")
+        atm_val  = oi_data["atm"]
+        step_oc  = 50 if oc_symbol == "NIFTY" else 100
+        near_strikes = [
+            s for s in oi_data["strikes"]
+            if abs(s["strike"] - atm_val) <= step_oc * 8
+        ]
+
+        if near_strikes:
+            import plotly.graph_objects as go_oi
+
+            strikes_list  = [s["strike"] for s in near_strikes]
+            call_oi_chg   = [s["ce_oi_chg"] for s in near_strikes]
+            put_oi_chg    = [s["pe_oi_chg"] for s in near_strikes]
+
+            fig_oi = go_oi.Figure()
+            fig_oi.add_trace(go_oi.Bar(
+                x=strikes_list,
+                y=call_oi_chg,
+                name="Call OI Change",
+                marker_color=[
+                    "#16a34a" if v > 0 else "#dc2626"
+                    for v in call_oi_chg
+                ],
+                opacity=0.8
+            ))
+            fig_oi.add_trace(go_oi.Bar(
+                x=strikes_list,
+                y=[-v for v in put_oi_chg],
+                name="Put OI Change (inverted)",
+                marker_color=[
+                    "#3b82f6" if v > 0 else "#f59e0b"
+                    for v in put_oi_chg
+                ],
+                opacity=0.8
+            ))
+            fig_oi.add_vline(
+                x=atm_val,
+                line_dash="dash",
+                line_color="#374151",
+                annotation_text=f"ATM {atm_val}",
+                annotation_position="top"
+            )
+            fig_oi.update_layout(
+                template="plotly_white",
+                height=350,
+                barmode="overlay",
+                title=(
+                    f"{oc_symbol} OI Change — "
+                    f"Green=Call build, Blue=Put build"
+                ),
+                xaxis_title="Strike Price",
+                yaxis_title="OI Change (contracts)",
+                margin=dict(l=10,r=10,t=40,b=40),
+                legend=dict(
+                    orientation="h",
+                    y=1.02
+                )
+            )
+            st.plotly_chart(fig_oi, use_container_width=True)
+
+            # IV display near ATM
+            st.markdown("#### IV (Implied Volatility) near ATM")
+            iv_rows = []
+            for s in near_strikes:
+                iv_rows.append({
+                    "Strike": s["strike"],
+                    "ATM": "◀ ATM" if s["is_atm"] else "",
+                    "CE LTP": f"₹{s['ce_ltp']:,.2f}",
+                    "CE IV %": f"{s['ce_iv']:.1f}%",
+                    "CE OI Chg": f"{s['ce_oi_chg']:+,}",
+                    "PE LTP": f"₹{s['pe_ltp']:,.2f}",
+                    "PE IV %": f"{s['pe_iv']:.1f}%",
+                    "PE OI Chg": f"{s['pe_oi_chg']:+,}",
+                })
+            st.dataframe(
+                pd.DataFrame(iv_rows),
+                hide_index=True,
+                width="stretch"
+            )
+
+            # IV Skew insight
+            atm_row = next(
+                (s for s in near_strikes if s["is_atm"]), None
+            )
+            if atm_row:
+                ce_iv = atm_row["ce_iv"]
+                pe_iv = atm_row["pe_iv"]
+                if pe_iv > ce_iv * 1.1:
+                    st.warning(
+                        f"⚠️ Put IV ({pe_iv}%) > Call IV ({ce_iv}%) — "
+                        f"market pricing in more downside risk. "
+                        f"PE options are expensive right now."
+                    )
+                elif ce_iv > pe_iv * 1.1:
+                    st.warning(
+                        f"⚠️ Call IV ({ce_iv}%) > Put IV ({pe_iv}%) — "
+                        f"market pricing in more upside risk. "
+                        f"CE options are expensive right now."
+                    )
+                else:
+                    st.success(
+                        f"✅ CE IV ({ce_iv}%) ≈ PE IV ({pe_iv}%) — "
+                        f"balanced market. Both CE and PE fairly priced."
+                    )
+    else:
+        st.warning(
+            "OI data unavailable from NSE. "
+            "NSE may be blocking. Try during market hours."
+        )
+
+    st.markdown("---")
 
     oc_data = get_options_chain(oc_symbol)
 

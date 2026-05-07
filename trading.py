@@ -4834,19 +4834,27 @@ with T3:
     alert_score = min_score_scan  # used for display only
 
     # Mobile-friendly controls - stack vertically on small screens
-    run_scanner = st.button(
-        "🚀 Scan All Stocks Now",
-        type="primary",
-        key="run_scanner",
-        use_container_width=True
-    )
-    if st.button(
-        "🔄 Clear cache & refresh data",
-        key="scan_clear_cache",
-        help="Forces Yahoo Finance to fetch fresh data"
-    ):
-        st.cache_data.clear()
-        st.rerun()
+    sc_b1, sc_b2 = st.columns([3,1])
+    with sc_b1:
+        run_scanner = st.button(
+            "🚀 Scan All Stocks Now",
+            type="primary",
+            key="run_scanner",
+            use_container_width=True
+        )
+    with sc_b2:
+        if st.button(
+            "🗑️ Clear & Rescan",
+            key="scan_clear_cache",
+            use_container_width=True,
+            help="Clears old results and fetches fresh data"
+        ):
+            # Clear all cached results
+            for _k in ["scan_results","scan_group_used",
+                       "scan_tf_used","scan_time"]:
+                st.session_state.pop(_k, None)
+            st.cache_data.clear()
+            st.rerun()
     st.markdown(
         "<div style='margin:6px 0;padding:10px 14px;"
         "background:#f0f9ff;border:1px solid #bae6fd;"
@@ -5269,13 +5277,34 @@ with T3:
         scan_time = st.session_state.get("scan_time","")
         grp_used  = st.session_state.get("scan_group_used","")
         tf_used   = st.session_state.get("scan_tf_used","")
-        st.info(
-            f"📊 Showing last scan results — "
-            f"{len(results)} signals | "
-            f"{grp_used} | {tf_used} | {scan_time}  "
-            f"*(Click Scan to refresh)*"
+        st.warning(
+            f"⚠️ Showing CACHED results from {scan_time} — "
+            f"{grp_used} | {tf_used} | "
+            f"Click **Scan All Stocks Now** or **🗑️ Clear & Rescan** "
+            f"to get fresh signals."
         )
-        # Display cached results
+        # Re-apply stale signal filter on cached results
+        # Prices may have changed since last scan
+        filtered_results = []
+        for _r in results:
+            _lp_chk = live_price(_r["Sym"])
+            if _lp_chk["ok"]:
+                _cur = _lp_chk["p"]
+                _ent = _r["Entry"]
+                _atr_chk = abs(_ent - _r["SL"])  # approximate ATR from SL distance
+                _max_d   = _atr_chk * 2.0
+                if _r["Direction"] == "UPTREND":
+                    if _cur < (_ent - _max_d):
+                        continue  # Price moved too far below entry
+                else:
+                    if _cur > (_ent + _max_d):
+                        continue  # Price moved too far above entry
+                # Update price in cached result
+                _r["Price"] = _cur
+                _r["Change%"] = _lp_chk["chg"]
+            filtered_results.append(_r)
+        results = filtered_results
+
         total_scanned = len(SCANNER_UNIVERSE.get(grp_used,[]))
 
         # ── Summary metrics ───────────────────────────────

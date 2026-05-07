@@ -2491,6 +2491,11 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
              obv_bull,
              "Yes" if obv_bull else "No",
              "Volume confirming price"),
+            ("8b. Bollinger Band — Price above midline",
+             cp > (bbup + bblw) / 2,
+             f"Mid ₹{(bbup+bblw)/2:,.0f} | "
+             f"Upper ₹{bbup:,.0f} | Lower ₹{bblw:,.0f}",
+             "Price above BB midline confirms uptrend"),
             ("9. Risk-Reward ≥ 1.5",
              rr_ratio >= 1.5,
              f"{rr_ratio}:1",
@@ -2548,19 +2553,24 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
              not obv_bull,
              "Yes" if not obv_bull else "No",
              "Volume confirming bearish move"),
+            ("8b. Bollinger Band — Price below midline",
+             cp < (bbup + bblw) / 2,
+             f"Mid ₹{(bbup+bblw)/2:,.0f} | "
+             f"Upper ₹{bbup:,.0f} | Lower ₹{bblw:,.0f}",
+             "Price below BB midline confirms downtrend"),
             ("9. Risk-Reward ≥ 1.5",
              rr_ratio >= 1.5,
              f"{rr_ratio}:1",
              "Reward must justify risk"),
-            ("9b. CPR — Price above CPR",
-             cpr_position == "ABOVE",
+            ("9b. CPR — Price below CPR",
+             cpr_position == "BELOW",
              f"{cpr_bias} | {cpr_type[:8]}",
-             "Central Pivot Range bias must be bullish"),
-            ("9c. Supertrend BUY signal",
-             st_bull,
+             "Central Pivot Range bias must be bearish"),
+            ("9c. Supertrend SELL signal",
+             not st_bull,
              f"{st_signal} ₹{st_value:,.0f}"
              + (" FRESH!" if st_crossed else ""),
-             "Supertrend must be in BUY zone"),
+             "Supertrend must be in SELL zone"),
             ("10. No Bullish Pattern",
              not any(p[1]=="bullish" for p in patterns),
              ", ".join(p[0] for p in patterns) or "None",
@@ -3948,6 +3958,38 @@ with T2:
         name="VWAP"
     ), row=1, col=1)
 
+    # Bollinger Bands on chart
+    if sig:
+        # Calculate BB series for chart
+        _bb_mid = plot_df["Close"].rolling(20).mean()
+        _bb_std = plot_df["Close"].rolling(20).std()
+        _bb_up  = _bb_mid + 2 * _bb_std
+        _bb_low = _bb_mid - 2 * _bb_std
+
+        fig.add_trace(go.Scatter(
+            x=plot_df.index, y=_bb_up.tail(100),
+            line=dict(color="rgba(147,197,253,0.6)",
+                      width=1, dash="dot"),
+            name="BB Upper",
+            showlegend=True
+        ), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=plot_df.index, y=_bb_low.tail(100),
+            line=dict(color="rgba(147,197,253,0.6)",
+                      width=1, dash="dot"),
+            name="BB Lower",
+            fill="tonexty",
+            fillcolor="rgba(147,197,253,0.05)",
+            showlegend=True
+        ), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=plot_df.index, y=_bb_mid.tail(100),
+            line=dict(color="rgba(147,197,253,0.4)",
+                      width=1),
+            name="BB Mid",
+            showlegend=False
+        ), row=1, col=1)
+
     # Supertrend line on chart
     if sig and sig["st_value"] > 0:
         st_color = "#16a34a" if sig["st_bull"] else "#dc2626"
@@ -4138,6 +4180,34 @@ with T2:
     kl4.metric("EMA9",       f"₹{sig['e9v']:,.0f}")
     kl5.metric("EMA21",      f"₹{sig['e21v']:,.0f}")
     kl6.metric("ATR",        f"₹{sig['atrv']:,.1f}")
+
+    # Bollinger Bands display
+    _bb_mid_v = round((sig["bbup"] + sig["bblw"]) / 2, 2)
+    _bb_width = round(
+        (sig["bbup"] - sig["bblw"]) / _bb_mid_v * 100, 2
+    )
+    _cp_vs_bb = (
+        "🔴 Near Upper Band — Overbought"
+        if sig["cp"] >= sig["bbup"] * 0.99
+        else "🟢 Near Lower Band — Oversold / Entry zone"
+        if sig["cp"] <= sig["bblw"] * 1.01
+        else "🟡 Inside Bands — Normal range"
+    )
+    bb1, bb2, bb3, bb4 = st.columns(4)
+    bb1.metric("BB Upper",  f"₹{sig['bbup']:,.0f}")
+    bb2.metric("BB Mid",    f"₹{_bb_mid_v:,.0f}")
+    bb3.metric("BB Lower",  f"₹{sig['bblw']:,.0f}")
+    bb4.metric("BB Width",  f"{_bb_width:.1f}%",
+               help="Low width = squeeze = breakout coming")
+    st.markdown(
+        f"<div style='background:#f0f9ff;"
+        f"border:1px solid #bae6fd;border-radius:8px;"
+        f"padding:8px 14px;font-size:13px;color:#0369a1'>"
+        f"<b>Bollinger Bands:</b> {_cp_vs_bb} &nbsp;|&nbsp; "
+        f"{'Squeeze — big move coming soon!' if _bb_width < 2 else 'Normal band width'}"
+        f"</div>",
+        unsafe_allow_html=True
+    )
 
     # CPR section
     # ── Supertrend Display ────────────────────────────────

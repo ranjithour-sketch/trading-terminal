@@ -2068,13 +2068,22 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
         rr_ratio   = round(reward_pts/(risk_pts+0.001), 2)
 
         # ── SL and Targets ────────────────────────────────
-        # Entry for CE = EMA9 (e9v) — wait for price to come to EMA9
-        # Entry for PE = EMA9 (e9v)
-        # SL and targets calculated FROM ENTRY PRICE not current price
-        # This ensures SL is always correctly placed relative to entry
+        # Entry logic:
+        # If current price is ABOVE EMA9 → entry = current price (already above EMA9)
+        # If current price is BELOW EMA9 → entry = EMA9 (wait for pullback)
+        # For PE: opposite logic
 
-        entry_long  = e9v   # CE entry = EMA9
-        entry_short = e9v   # PE entry = EMA9
+        # CE entry
+        if cp >= e9v:
+            entry_long = round(cp, 2)   # Price already above EMA9 — enter now
+        else:
+            entry_long = round(e9v, 2)  # Wait for price to reach EMA9
+
+        # PE entry
+        if cp <= e9v:
+            entry_short = round(cp, 2)  # Price already below EMA9 — enter now
+        else:
+            entry_short = round(e9v, 2) # Wait for price to reach EMA9
 
         # SL = 1.0× ATR below entry (CE) or above entry (PE)
         sl_long   = round(entry_long  - atrv * 1.0, 2)
@@ -5044,6 +5053,26 @@ with T3:
                 _min_rr = float(st.session_state.get("min_rr_scan","1.0"))
                 if rr < _min_rr:
                     continue
+
+                # ── Fix 2: Skip if price too far from entry ──
+                # Signal is stale if current price has moved
+                # more than 1.5 ATR away from entry in wrong direction
+                _entry = sig["e9v"]
+                _cp    = sig["cp"]
+                _atr   = sig["atrv"]
+                _dist  = abs(_cp - _entry)
+                _max_dist = _atr * 1.5
+
+                if direction == "UPTREND":
+                    # CE: price should be near or above entry (EMA9)
+                    # If price is too far BELOW entry — signal is stale
+                    if _cp < (_entry - _max_dist):
+                        continue
+                elif direction == "DOWNTREND":
+                    # PE: price should be near or below entry (EMA9)
+                    # If price is too far ABOVE entry — signal is stale
+                    if _cp > (_entry + _max_dist):
+                        continue
 
                 # CPR is informational only — not used as filter
                 # CPR from previous day may not match intraday moves

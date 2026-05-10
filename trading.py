@@ -2620,6 +2620,9 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
             fib_nearest_val=fib_nearest_val,
             fib_distance_pct=fib_distance_pct,
             near_fib=near_fib, fib_support=fib_support,
+            # MACD values
+            mv=mv, msv=msv, mv1=mv1, msv1=msv1,
+            macd_bull=(mv > msv),
             # series
             e9s=e9, e21s=e21, e50s=e50,
             vwaps=vwap, rsis=rsi,
@@ -9877,10 +9880,12 @@ with T10:
                 else:
                     warnings.append("Supertrend flipped against trade")
 
-                # MACD
+                # MACD — use safe .get() with fallback
+                _tm_mv  = tm_sig.get("mv", 0)
+                _tm_msv = tm_sig.get("msv", 0)
                 macd_ok = (
-                    (is_ce  and tm_sig["mv"] > tm_sig["msv"]) or
-                    (not is_ce and tm_sig["mv"] < tm_sig["msv"])
+                    (is_ce     and _tm_mv > _tm_msv) or
+                    (not is_ce and _tm_mv < _tm_msv)
                 )
                 if macd_ok:
                     strength += 1

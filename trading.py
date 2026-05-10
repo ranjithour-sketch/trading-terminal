@@ -224,13 +224,11 @@ TAB_ROUTES = {
     "scanner":   2,
     "ml":        3,
     "smart":     4,
-    "calc":      5,
-    "news":      6,
-    "pulse":     7,
-    "options":   8,
-    "backtest":  9,
-    "hub":       10,
-    "manager":   11,
+    "pulse":     5,
+    "options":   6,
+    "backtest":  7,
+    "hub":       8,
+    "manager":   9,
 }
 TAB_NAMES = [
     "📋 Watchlist",
@@ -238,15 +236,13 @@ TAB_NAMES = [
     "🔍 Auto Scanner",
     "🤖 ML Prediction",
     "🏦 Smart Money",
-    "🧮 P&L Calculator",
-    "📰 News & Events",
     "📊 Market Pulse",
     "🔗 Options Chain",
     "🧪 Backtest",
     "🎯 Signal Hub",
     "🛡️ Trade Manager",
 ]
-TAB_ICONS = ["📋","🎯","🔍","🤖","🏦","🧮","📰","📊","🔗","🧪","🎯","🛡️"]
+TAB_ICONS = ["📋","🎯","🔍","🤖","🏦","📊","🔗","🧪","🎯","🛡️"]
 TAB_KEYS  = list(TAB_ROUTES.keys())
 
 # Read current tab from URL
@@ -2764,8 +2760,6 @@ with st.expander("Open any tab in a separate browser window"):
         ("🔍 Scanner",      "scanner",   "#9333ea"),
         ("🤖 ML",           "ml",        "#0891b2"),
         ("🏦 Smart Money",  "smart",     "#d97706"),
-        ("🧮 P&L Calc",     "calc",      "#dc2626"),
-        ("📰 News",         "news",      "#475569"),
         ("📊 Market Pulse", "pulse",     "#0f766e"),
         ("🔗 Options",      "options",   "#7c3aed"),
         ("🧪 Backtest",     "backtest",  "#1d4ed8"),
@@ -3064,7 +3058,7 @@ stick = st.session_state["st"]
 # ══════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════
-T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,T12 = st.tabs(TAB_NAMES)
+T1,T2,T3,T4,T5,T6,T7,T8,T9,T10 = st.tabs(TAB_NAMES)
 
 # ── Reusable inline stock search widget ──────────────────
 def inline_stock_search(tab_key: str):
@@ -7349,10 +7343,8 @@ with T5:
             | **Vol Ratio > 2.0** | Institutional block trade | 📊 Watch direction |
             """)
 
-# ╔══════════════════════════════════════════════════════╗
-# ║  TAB 4 — P&L CALCULATOR                             ║
-# ╚══════════════════════════════════════════════════════╝
-with T6:
+# P&L Calculator tab removed
+if False:
     st.markdown("### 🧮 Options P&L Calculator")
     st.caption(
         "Enter trade details to see exact profit, loss "
@@ -7874,6 +7866,8 @@ with T6:
                             send_telegram(tok2, cid2, msg2)
 
 
+# News & Events tab removed
+if False: pass
 # ╔══════════════════════════════════════════════════════╗
 # ║  TAB 5 — NEWS & EVENTS                              ║
 # ╚══════════════════════════════════════════════════════╝
@@ -8005,7 +7999,7 @@ with T7:
 # ╔══════════════════════════════════════════════════════╗
 # ║  TAB 8 — MARKET PULSE                               ║
 # ╚══════════════════════════════════════════════════════╝
-with T8:
+with T6:
     st.markdown("### 📊 Market Pulse — VIX + FII/DII")
     st.caption(
         "India VIX shows market fear. "
@@ -8314,7 +8308,7 @@ with T8:
 # ╔══════════════════════════════════════════════════════╗
 # ║  TAB 9 — OPTIONS CHAIN                              ║
 # ╚══════════════════════════════════════════════════════╝
-with T9:
+with T7:
     st.markdown("### 🔗 Options Chain + OI Analysis")
     st.caption(
         "OI Change is the most powerful intraday options signal. "
@@ -8706,7 +8700,7 @@ with T9:
 # ╔══════════════════════════════════════════════════════╗
 # ║  TAB 10 — BACKTEST                                  ║
 # ╚══════════════════════════════════════════════════════╝
-with T10:
+with T8:
     st.markdown("### 🧪 Strategy Backtest")
     st.caption(
         "Test your signal strategy on historical data. "
@@ -9054,7 +9048,7 @@ with T10:
 # ╔══════════════════════════════════════════════════════╗
 # ║  TAB 11 — SIGNAL HUB                                ║
 # ╚══════════════════════════════════════════════════════╝
-with T11:
+with T9:
     st.markdown("### 🎯 Signal Hub — All-in-One Analysis")
     st.caption(
         "Everything in one screen — Technical signals, "
@@ -9638,7 +9632,7 @@ with T11:
 # ╔══════════════════════════════════════════════════════╗
 # ║  TAB 12 — TRADE MANAGER                             ║
 # ╚══════════════════════════════════════════════════════╝
-with T12:
+with T10:
     st.markdown("### 🛡️ Trade Manager — Active Trade Monitor")
     st.caption(
         "Add your active trades here. The system monitors each trade "

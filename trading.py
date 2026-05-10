@@ -5131,6 +5131,59 @@ with T3:
             f"to match."
         )
 
+    # ── Time Session Filter ───────────────────────────────
+    from datetime import datetime as _dtnow
+    import pytz as _pytz
+    _ist = _pytz.timezone("Asia/Kolkata")
+    _now_ist = _dtnow.now(_ist)
+    _hour = _now_ist.hour
+    _min  = _now_ist.minute
+    _time_dec = _hour + _min / 60.0  # decimal time
+
+    if 9.25 <= _time_dec < 10.0:
+        st.error(
+            "⏰ **OPENING SESSION WARNING (9:15 - 10:00 AM)** — "
+            "Market is highly volatile right now. "
+            "Signals are unreliable during first 45 minutes. "
+            "Wait until 10:00 AM before acting on any signal."
+        )
+        _session_ok = False
+        _session_label = "🔴 OPENING — Wait until 10:00 AM"
+    elif 10.0 <= _time_dec < 13.0:
+        st.success(
+            "✅ **MID SESSION (10:00 AM - 1:00 PM)** — "
+            "Best time to trade. Signals are most reliable now."
+        )
+        _session_ok = True
+        _session_label = "🟢 MID SESSION — Best time to trade"
+    elif 13.0 <= _time_dec < 14.5:
+        st.info(
+            "ℹ️ **AFTERNOON SESSION (1:00 - 2:30 PM)** — "
+            "Good for continuation trades. "
+            "Avoid new entries after 2:00 PM."
+        )
+        _session_ok = True
+        _session_label = "🟡 AFTERNOON — Continuation trades only"
+    elif 14.5 <= _time_dec < 15.3:
+        st.warning(
+            "⚠️ **PRE-CLOSE (2:30 - 3:15 PM)** — "
+            "Exit existing positions only. "
+            "Do NOT enter new trades."
+        )
+        _session_ok = False
+        _session_label = "🔴 PRE-CLOSE — Exit only, no new entries"
+    elif _time_dec >= 15.3 or _time_dec < 9.25:
+        st.info(
+            "🕐 **MARKET CLOSED** — "
+            "You can scan to prepare for tomorrow. "
+            "Do not place any orders."
+        )
+        _session_ok = True  # Allow scanning for prep
+        _session_label = "⚫ MARKET CLOSED — Prep for tomorrow"
+    else:
+        _session_ok = True
+        _session_label = "🟢 Market open"
+
     # IV Rank quick check before scanning
     _iv_quick = get_iv_rank()
     if _iv_quick["ok"]:
@@ -8308,6 +8361,183 @@ with T6:
         )
 
 
+
+    # ── Sector Heatmap ─────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 🌡️ Sector Heatmap — Today's Strength")
+    st.caption(
+        "Always trade stocks from the strongest sector. "
+        "Green = bullish today, Red = bearish today."
+    )
+
+    if st.button("Load Sector Heatmap", key="sector_heatmap_btn"):
+        st.session_state["load_heatmap"] = True
+
+    if st.session_state.get("load_heatmap"):
+        _sector_map = {
+            "🏦 Banking":   ["HDFCBANK.NS","ICICIBANK.NS","SBIN.NS"],
+            "💻 IT":        ["TCS.NS","INFY.NS","WIPRO.NS"],
+            "💊 Pharma":    ["SUNPHARMA.NS","DRREDDY.NS","CIPLA.NS"],
+            "🚗 Auto":      ["MARUTI.NS","TATAMOTORS.NS","BAJAJ-AUTO.NS"],
+            "⚡ Energy":    ["RELIANCE.NS","ONGC.NS","NTPC.NS"],
+            "🔩 Metals":    ["TATASTEEL.NS","JSWSTEEL.NS","HINDALCO.NS"],
+            "🏗️ Infra":    ["LT.NS","ADANIPORTS.NS","SIEMENS.NS"],
+            "🛒 FMCG":      ["HINDUNILVR.NS","ITC.NS","NESTLEIND.NS"],
+            "💰 Finance":   ["BAJFINANCE.NS","BAJAJFINSV.NS","HDFCLIFE.NS"],
+            "📡 Telecom":   ["BHARTIARTL.NS","TATACOMM.NS"],
+        }
+        _sector_results = {}
+        _prog_s = st.progress(0, text="Loading sectors...")
+        for _si, (_sname, _stocks) in enumerate(_sector_map.items()):
+            _prog_s.progress(
+                int((_si+1)/len(_sector_map)*100),
+                text=f"Loading {_sname}..."
+            )
+            _changes = []
+            for _stk in _stocks:
+                try:
+                    _tk = yf.Ticker(_stk)
+                    _fi = _tk.fast_info
+                    _p  = float(_fi.last_price or 0)
+                    _pc = float(_fi.previous_close or _p)
+                    if _pc > 0:
+                        _changes.append(round((_p-_pc)/_pc*100,2))
+                except Exception:
+                    pass
+            if _changes:
+                _sector_results[_sname] = round(
+                    sum(_changes)/len(_changes), 2
+                )
+        _prog_s.empty()
+
+        if _sector_results:
+            _sorted_s = sorted(
+                _sector_results.items(),
+                key=lambda x: x[1], reverse=True
+            )
+            _hcols = st.columns(2)
+            for _hi, (_sname, _chg) in enumerate(_sorted_s):
+                _hcol = _hcols[_hi % 2]
+                if _chg >= 1.5:
+                    _hbg="#f0fdf4"; _hbr="#16a34a"; _htc="#166534"; _hic="🔥"
+                elif _chg >= 0.3:
+                    _hbg="#f0fdf4"; _hbr="#86efac"; _htc="#166534"; _hic="✅"
+                elif _chg >= -0.3:
+                    _hbg="#f8fafc"; _hbr="#cbd5e1"; _htc="#475569"; _hic="➡️"
+                elif _chg >= -1.5:
+                    _hbg="#fef2f2"; _hbr="#fca5a5"; _htc="#991b1b"; _hic="⚠️"
+                else:
+                    _hbg="#fef2f2"; _hbr="#dc2626"; _htc="#991b1b"; _hic="🔴"
+                _hcol.markdown(
+                    f"<div style='background:{_hbg};"
+                    f"border:1.5px solid {_hbr};"
+                    f"border-radius:10px;padding:14px;"
+                    f"margin-bottom:8px;"
+                    f"display:flex;justify-content:"
+                    f"space-between;align-items:center'>"
+                    f"<span style='font-size:14px;"
+                    f"font-weight:700;color:{_htc}'>"
+                    f"{_hic} {_sname}</span>"
+                    f"<span style='font-size:22px;"
+                    f"font-weight:700;color:{_htc}'>"
+                    f"{_chg:+.2f}%</span></div>",
+                    unsafe_allow_html=True
+                )
+            _best_s  = _sorted_s[0]
+            _worst_s = _sorted_s[-1]
+            st.success(
+                f"🔥 Strongest: **{_best_s[0]}** "
+                f"({_best_s[1]:+.2f}%) — "
+                f"Focus CE trades here"
+            )
+            if _worst_s[1] < -0.3:
+                st.error(
+                    f"🔴 Weakest: **{_worst_s[0]}** "
+                    f"({_worst_s[1]:+.2f}%) — "
+                    f"Consider PE trades here"
+                )
+
+    # ── Market Breadth ─────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 📊 Market Breadth — Is the rally broad?")
+    st.caption(
+        "Breadth above 2:1 means most stocks rising — strong market. "
+        "Breadth below 1:1 means rally is narrow — avoid CE trades."
+    )
+    if st.button("Check Market Breadth", key="breadth_btn"):
+        st.session_state["load_breadth"] = True
+
+    if st.session_state.get("load_breadth"):
+        _nifty50 = [
+            "RELIANCE.NS","TCS.NS","HDFCBANK.NS","ICICIBANK.NS",
+            "INFY.NS","HINDUNILVR.NS","ITC.NS","SBIN.NS",
+            "BHARTIARTL.NS","KOTAKBANK.NS","LT.NS","AXISBANK.NS",
+            "BAJFINANCE.NS","ASIANPAINT.NS","MARUTI.NS",
+            "SUNPHARMA.NS","TITAN.NS","WIPRO.NS","TATASTEEL.NS",
+            "JSWSTEEL.NS","TATAMOTORS.NS","HCLTECH.NS","TECHM.NS",
+            "DRREDDY.NS","CIPLA.NS","NTPC.NS","ONGC.NS",
+            "POWERGRID.NS","ULTRACEMCO.NS","NESTLEIND.NS",
+        ]
+        _adv=0; _dec=0; _unc=0
+        _prog_b = st.progress(0, text="Checking breadth...")
+        for _bi, _bs in enumerate(_nifty50):
+            _prog_b.progress(
+                int((_bi+1)/len(_nifty50)*100),
+                text=f"Checking {_bs}..."
+            )
+            try:
+                _btk = yf.Ticker(_bs)
+                _bfi = _btk.fast_info
+                _bp  = float(_bfi.last_price or 0)
+                _bpc = float(_bfi.previous_close or _bp)
+                if _bpc > 0:
+                    _bchg = (_bp-_bpc)/_bpc*100
+                    if _bchg > 0.2:   _adv += 1
+                    elif _bchg < -0.2: _dec += 1
+                    else:              _unc += 1
+            except Exception:
+                pass
+        _prog_b.empty()
+
+        _ratio = round(_adv/(_dec+0.001), 2)
+        bb1,bb2,bb3,bb4 = st.columns(4)
+        bb1.metric("Advancing", f"{_adv}")
+        bb2.metric("Declining", f"{_dec}")
+        bb3.metric("Unchanged", f"{_unc}")
+        bb4.metric("A/D Ratio", f"{_ratio}:1")
+
+        if _ratio >= 3:
+            st.success(f"🔥 Very strong breadth {_ratio}:1 — High confidence CE day")
+        elif _ratio >= 1.5:
+            st.success(f"✅ Good breadth {_ratio}:1 — CE trades favoured")
+        elif _ratio >= 0.7:
+            st.warning(f"⚠️ Mixed breadth {_ratio}:1 — Trade smaller size")
+        else:
+            st.error(f"🔴 Weak breadth {_ratio}:1 — Avoid CE, consider PE")
+
+        _total_b = _adv+_dec+_unc
+        if _total_b > 0:
+            _ap = int(_adv/_total_b*100)
+            _dp = int(_dec/_total_b*100)
+            st.markdown(
+                f"<div style='height:24px;border-radius:12px;"
+                f"overflow:hidden;display:flex;margin-top:8px'>"
+                f"<div style='width:{_ap}%;background:#16a34a;"
+                f"color:white;font-size:11px;font-weight:700;"
+                f"display:flex;align-items:center;"
+                f"justify-content:center'>{_ap}%</div>"
+                f"<div style='width:{100-_ap-_dp}%;"
+                f"background:#94a3b8'></div>"
+                f"<div style='width:{_dp}%;background:#dc2626;"
+                f"color:white;font-size:11px;font-weight:700;"
+                f"display:flex;align-items:center;"
+                f"justify-content:center'>{_dp}%</div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+
+
 # ╔══════════════════════════════════════════════════════╗
 # ║  TAB 9 — OPTIONS CHAIN                              ║
 # ╚══════════════════════════════════════════════════════╝
@@ -10247,6 +10477,147 @@ with T10:
                         )
                         if send_telegram(_tok, _cid, _msg):
                             st.success("✅ Update sent!")
+
+    # ── Trade Journal Analytics ───────────────────────────
+    st.markdown("---")
+    st.markdown("### 📈 Trade Journal Analytics")
+    st.caption(
+        "Records your trades and shows your personal win rate patterns. "
+        "Add trades here after closing them to build your analytics."
+    )
+
+    # Manual trade record form
+    with st.expander("📝 Record Completed Trade"):
+        ja1, ja2, ja3 = st.columns(3)
+        with ja1:
+            j_stock  = st.text_input("Stock", key="j_stock")
+            j_type   = st.selectbox("Type", ["BUY CE","BUY PE"], key="j_type")
+            j_result = st.selectbox("Result", ["WIN","LOSS","BREAKEVEN"], key="j_result")
+        with ja2:
+            j_entry  = st.number_input("Entry ₹", value=0.0, key="j_entry")
+            j_exit   = st.number_input("Exit ₹",  value=0.0, key="j_exit")
+            j_score  = st.slider("Signal score", 5, 10, 7, key="j_score")
+        with ja3:
+            j_time   = st.selectbox(
+                "Entry time",
+                ["9:15-10:00 (Opening)",
+                 "10:00-11:00 (Mid AM)",
+                 "11:00-13:00 (Mid session)",
+                 "13:00-14:30 (Afternoon)",
+                 "14:30+ (Pre-close)"],
+                key="j_time"
+            )
+            j_vix    = st.number_input("VIX at entry", value=15.0, step=0.1, key="j_vix")
+            j_emotion= st.selectbox(
+                "Emotional state",
+                ["Calm","Anxious","Overconfident","FOMO","Disciplined"],
+                key="j_emotion"
+            )
+
+        if st.button("Save Trade Record", key="j_save", type="primary"):
+            if "trade_journal" not in st.session_state:
+                st.session_state["trade_journal"] = []
+            import datetime as _jdt
+            _pnl = round(
+                ((j_exit - j_entry) if j_type=="BUY CE"
+                 else (j_entry - j_exit)) / (j_entry+0.001) * 100, 2
+            ) if j_entry > 0 and j_exit > 0 else 0
+
+            st.session_state["trade_journal"].append({
+                "date":    _jdt.datetime.now().strftime("%d %b %Y"),
+                "stock":   j_stock,
+                "type":    j_type,
+                "result":  j_result,
+                "entry":   j_entry,
+                "exit":    j_exit,
+                "pnl_pct": _pnl,
+                "score":   j_score,
+                "time":    j_time,
+                "vix":     j_vix,
+                "emotion": j_emotion,
+            })
+            st.success("Trade recorded ✅")
+
+    # Analytics display
+    journal = st.session_state.get("trade_journal", [])
+    if len(journal) >= 3:
+        import pandas as _jpd
+        jdf = _jpd.DataFrame(journal)
+        wins  = jdf[jdf["result"]=="WIN"]
+        total = len(jdf)
+        wr    = round(len(wins)/total*100, 1)
+
+        # Overall metrics
+        jm1,jm2,jm3,jm4 = st.columns(4)
+        jm1.metric("Total Trades", total)
+        jm2.metric("Win Rate",     f"{wr}%")
+        jm3.metric("Avg Win",      f"{wins['pnl_pct'].mean():.1f}%" if len(wins)>0 else "—")
+        jm4.metric("Avg Loss",     f"{jdf[jdf['result']=='LOSS']['pnl_pct'].mean():.1f}%" if len(jdf[jdf['result']=='LOSS'])>0 else "—")
+
+        # Win rate by time
+        st.markdown("**Win Rate by Entry Time**")
+        _t_wr = jdf.groupby("time").apply(
+            lambda x: round(len(x[x["result"]=="WIN"])/len(x)*100,1)
+        ).reset_index()
+        _t_wr.columns = ["Time", "Win Rate %"]
+        st.dataframe(_t_wr, hide_index=True, width="stretch")
+
+        # Win rate by signal score
+        st.markdown("**Win Rate by Signal Score**")
+        _s_wr = jdf.groupby("score").apply(
+            lambda x: round(len(x[x["result"]=="WIN"])/len(x)*100,1)
+        ).reset_index()
+        _s_wr.columns = ["Score", "Win Rate %"]
+        st.dataframe(_s_wr, hide_index=True, width="stretch")
+
+        # Win rate by VIX
+        jdf["vix_range"] = _jpd.cut(
+            jdf["vix"],
+            bins=[0,13,17,20,100],
+            labels=["<13 Calm","13-17 Normal","17-20 Elevated",">20 High"]
+        )
+        _v_wr = jdf.groupby("vix_range", observed=True).apply(
+            lambda x: round(len(x[x["result"]=="WIN"])/len(x)*100,1)
+        ).reset_index()
+        _v_wr.columns = ["VIX Range","Win Rate %"]
+        st.markdown("**Win Rate by VIX Level**")
+        st.dataframe(_v_wr, hide_index=True, width="stretch")
+
+        # Emotion analysis
+        st.markdown("**Emotion vs Results**")
+        _e_wr = jdf.groupby("emotion").apply(
+            lambda x: round(len(x[x["result"]=="WIN"])/len(x)*100,1)
+        ).reset_index()
+        _e_wr.columns = ["Emotion","Win Rate %"]
+        st.dataframe(_e_wr, hide_index=True, width="stretch")
+
+        # Key insight
+        if len(_t_wr) > 1:
+            _best_time = _t_wr.loc[_t_wr["Win Rate %"].idxmax(),"Time"]
+            st.info(
+                f"💡 Your best trading time: **{_best_time}** — "
+                f"focus your entries during this window"
+            )
+
+        # All trades table
+        with st.expander("All recorded trades"):
+            st.dataframe(
+                jdf[["date","stock","type","result",
+                     "pnl_pct","score","time","vix","emotion"]],
+                hide_index=True,
+                width="stretch"
+            )
+    elif len(journal) > 0:
+        st.info(
+            f"You have recorded {len(journal)} trade(s). "
+            "Record at least 3 trades to see analytics."
+        )
+    else:
+        st.info(
+            "No trades recorded yet. "
+            "Record your completed trades above to build analytics. "
+            "After 20+ trades you will see powerful patterns."
+        )
 
     # ── Closed trades ──────────────────────────────────────
     if closed:

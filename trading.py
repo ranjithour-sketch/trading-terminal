@@ -9762,7 +9762,7 @@ with T12:
             is_ce   = trade["type"] == "BUY CE"
             direction = "UPTREND" if is_ce else "DOWNTREND"
 
-            # P&L on stock price
+            # Stock price P&L
             pnl_pts = (
                 (cp_now - trade["entry"]) if is_ce
                 else (trade["entry"] - cp_now)
@@ -9770,7 +9770,33 @@ with T12:
             pnl_pct = round(pnl_pts / trade["entry"] * 100, 2)
             pnl_col = "#16a34a" if pnl_pts >= 0 else "#dc2626"
 
-            # SL / Target hit
+            # Options P&L calculation
+            opt_paid = trade.get("opt_price", 0)
+            opt_lot  = 50  # default NSE lot size
+            # Estimate current option price using delta approximation
+            # Delta ~ 0.5 for ATM, higher for ITM
+            _atm_dist = abs(cp_now - trade["entry"])
+            _atm_pct  = _atm_dist / (trade["entry"] + 0.001)
+            _delta    = max(0.2, min(0.8, 0.5 + (pnl_pts/(trade["entry"]+0.001)) * 2))
+            opt_curr_est = max(
+                0.5,
+                opt_paid + (pnl_pts * _delta)
+            ) if opt_paid > 0 else 0
+
+            opt_pnl_per_lot = round(
+                (opt_curr_est - opt_paid) * opt_lot, 2
+            ) if opt_paid > 0 else 0
+            opt_pnl_total = round(
+                opt_pnl_per_lot * trade.get("lots", 1), 2
+            ) if opt_paid > 0 else 0
+            opt_pnl_col = "#16a34a" if opt_pnl_total >= 0 else "#dc2626"
+
+            # Theta decay warning
+            # Options lose ~0.3-0.5% of premium per day for ATM options
+            opt_theta_daily = round(opt_paid * 0.004, 2) if opt_paid > 0 else 0
+            days_held = 1  # approximate
+
+            # SL / Target hit (based on stock price)
             sl_hit  = (
                 (cp_now <= trade["sl"]) if is_ce
                 else (cp_now >= trade["sl"])
@@ -9778,6 +9804,12 @@ with T12:
             tgt_hit = (
                 (cp_now >= trade["target"]) if is_ce
                 else (cp_now <= trade["target"])
+            )
+
+            # Options-specific exit: if option lost > 50% of premium
+            opt_stop_hit = (
+                opt_paid > 0 and
+                opt_curr_est < opt_paid * 0.5
             )
 
             # ── Strength analysis ──────────────────────────
@@ -9900,20 +9932,40 @@ with T12:
             # ── Holding time recommendation ─────────────────
             style = trade["style"]
             if "Intraday" in style:
-                hold_advice = "Exit by 2:45 PM regardless"
-                max_hold    = "Today only"
+                hold_advice  = "Exit by 2:45 PM regardless"
+                max_hold     = "Today only"
+                theta_urgent = opt_theta_daily > 0
             elif "1 day" in style:
-                hold_advice = "Review tomorrow morning"
-                max_hold    = "1 trading day"
+                hold_advice  = "Review tomorrow morning before 9:30 AM"
+                max_hold     = "1 trading day"
+                theta_urgent = opt_theta_daily > opt_paid * 0.05
             elif "3 days" in style:
-                hold_advice = "Review every morning for 3 days"
-                max_hold    = "3 trading days"
+                hold_advice  = "Review every morning. Exit if score drops below 5."
+                max_hold     = "3 trading days"
+                theta_urgent = opt_theta_daily > opt_paid * 0.03
             else:
-                hold_advice = "Review every morning for 1 week"
-                max_hold    = "5 trading days"
+                hold_advice  = "Review every morning. Weekly options lose value fast."
+                max_hold     = "5 trading days"
+                theta_urgent = opt_theta_daily > opt_paid * 0.02
+
+            # Theta warning for swing trades
+            if theta_urgent and opt_paid > 0:
+                warnings.append(
+                    f"⚠️ Theta eating ₹{opt_theta_daily:.0f}/day — "
+                    f"option losing value even if stock stays flat"
+                )
 
             # ── Final verdict ───────────────────────────────
-            if sl_hit:
+            if opt_stop_hit and not sl_hit:
+                verdict  = "🔴 EXIT NOW — OPTION DOWN 50%"
+                v_col    = "#dc2626"
+                v_bg     = "#fef2f2"
+                v_action = (
+                    f"Option premium dropped from "
+                    f"₹{opt_paid} to ~₹{opt_curr_est:.0f}. "
+                    "50% stop loss on option hit. Exit now."
+                )
+            elif sl_hit:
                 verdict     = "🔴 EXIT NOW — STOP LOSS HIT"
                 v_col       = "#dc2626"
                 v_bg        = "#fef2f2"
@@ -10040,7 +10092,49 @@ with T12:
                 f"color:#1d4ed8'>{max_hold}</div></div>"
                 f"</div>"
 
-                f"</div>",
+                + (
+                    f"<div style='display:grid;"
+                    f"grid-template-columns:repeat(4,1fr);"
+                    f"gap:8px;margin-top:8px'>"
+
+                    f"<div style='background:#faf5ff;"
+                    f"border-radius:8px;padding:10px;"
+                    f"text-align:center'>"
+                    f"<div style='font-size:10px;color:#64748b'>"
+                    f"Option Paid</div>"
+                    f"<div style='font-size:14px;font-weight:700;"
+                    f"color:#7c3aed'>₹{opt_paid:,.0f}</div></div>"
+
+                    f"<div style='background:#faf5ff;"
+                    f"border-radius:8px;padding:10px;"
+                    f"text-align:center'>"
+                    f"<div style='font-size:10px;color:#64748b'>"
+                    f"Est. Now</div>"
+                    f"<div style='font-size:14px;font-weight:700;"
+                    f"color:{opt_pnl_col}'>"
+                    f"₹{opt_curr_est:,.0f}</div></div>"
+
+                    f"<div style='background:#faf5ff;"
+                    f"border-radius:8px;padding:10px;"
+                    f"text-align:center'>"
+                    f"<div style='font-size:10px;color:#64748b'>"
+                    f"Option P&L</div>"
+                    f"<div style='font-size:14px;font-weight:700;"
+                    f"color:{opt_pnl_col}'>"
+                    f"₹{opt_pnl_total:+,.0f}</div></div>"
+
+                    f"<div style='background:#faf5ff;"
+                    f"border-radius:8px;padding:10px;"
+                    f"text-align:center'>"
+                    f"<div style='font-size:10px;color:#64748b'>"
+                    f"Theta/day</div>"
+                    f"<div style='font-size:14px;font-weight:700;"
+                    f"color:#dc2626'>-₹{opt_theta_daily:,.0f}</div>"
+                    f"</div></div>"
+                    if opt_paid > 0 else ""
+                )
+
+                + f"</div>",
                 unsafe_allow_html=True
             )
 

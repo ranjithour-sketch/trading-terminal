@@ -2091,6 +2091,33 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
         msv1 = float(msig.iloc[-2])
         adxv = float(adx.iloc[-1])
         vwv  = float(vwap.iloc[-1])
+
+        # VWAP Standard Deviation Bands
+        # +1 SD = overbought, -1 SD = oversold
+        try:
+            _vwap_std  = float(c.tail(20).std())
+            vwap_upper = round(vwv + _vwap_std, 2)
+            vwap_lower = round(vwv - _vwap_std, 2)
+            vwap_u2    = round(vwv + 2 * _vwap_std, 2)
+            vwap_l2    = round(vwv - 2 * _vwap_std, 2)
+            # Position relative to VWAP bands
+            if cp >= vwap_u2:
+                vwap_zone = "EXTREME_OB"  # extremely overbought
+            elif cp >= vwap_upper:
+                vwap_zone = "OVERBOUGHT"
+            elif cp <= vwap_l2:
+                vwap_zone = "EXTREME_OS"  # extremely oversold
+            elif cp <= vwap_lower:
+                vwap_zone = "OVERSOLD"
+            else:
+                vwap_zone = "FAIR_VALUE"
+        except Exception:
+            vwap_upper = round(vwv * 1.005, 2)
+            vwap_lower = round(vwv * 0.995, 2)
+            vwap_u2    = round(vwv * 1.010, 2)
+            vwap_l2    = round(vwv * 0.990, 2)
+            vwap_zone  = "FAIR_VALUE"
+
         atrv = float(atr.iloc[-1])
         # Validate ATR — must be positive and reasonable
         # If NaN or zero or negative — use 1% of price as fallback
@@ -2300,6 +2327,78 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
         reward_pts = round(res - cp, 2)
         rr_ratio   = round(reward_pts/(risk_pts+0.001), 2)
 
+        # ── Weekly & Monthly S/R + Pivots ─────────────────
+        # Fetch weekly and monthly candles for key levels
+        try:
+            df_w = df.copy()
+            df_w.index = pd.to_datetime(df_w.index)
+            # Weekly OHLC
+            w_grp  = df_w.resample("1W").agg({
+                "High":"max","Low":"min","Close":"last","Open":"first"
+            }).dropna().tail(8)  # last 8 weeks
+            # Monthly OHLC
+            m_grp  = df_w.resample("1ME").agg({
+                "High":"max","Low":"min","Close":"last","Open":"first"
+            }).dropna().tail(3)  # last 3 months
+
+            # Weekly pivot
+            if len(w_grp) >= 2:
+                pw_h = float(w_grp["High"].iloc[-2])
+                pw_l = float(w_grp["Low"].iloc[-2])
+                pw_c = float(w_grp["Close"].iloc[-2])
+                w_pivot = round((pw_h + pw_l + pw_c) / 3, 2)
+                w_r1 = round(2 * w_pivot - pw_l, 2)
+                w_s1 = round(2 * w_pivot - pw_h, 2)
+                w_r2 = round(w_pivot + (pw_h - pw_l), 2)
+                w_s2 = round(w_pivot - (pw_h - pw_l), 2)
+            else:
+                w_pivot = w_r1 = w_s1 = w_r2 = w_s2 = cp
+
+            # Monthly pivot
+            if len(m_grp) >= 2:
+                pm_h = float(m_grp["High"].iloc[-2])
+                pm_l = float(m_grp["Low"].iloc[-2])
+                pm_c = float(m_grp["Close"].iloc[-2])
+                m_pivot = round((pm_h + pm_l + pm_c) / 3, 2)
+                m_r1 = round(2 * m_pivot - pm_l, 2)
+                m_s1 = round(2 * m_pivot - pm_h, 2)
+                m_r2 = round(m_pivot + (pm_h - pm_l), 2)
+                m_s2 = round(m_pivot - (pm_h - pm_l), 2)
+            else:
+                m_pivot = m_r1 = m_s1 = m_r2 = m_s2 = cp
+
+            # Weekly S/R from swing highs/lows
+            w_highs = [float(w_grp["High"].iloc[i])
+                       for i in range(len(w_grp))]
+            w_lows  = [float(w_grp["Low"].iloc[i])
+                       for i in range(len(w_grp))]
+            w_sup = round(max(
+                [l for l in w_lows if l < cp], default=cp*0.95
+            ), 2)
+            w_res = round(min(
+                [h for h in w_highs if h > cp], default=cp*1.05
+            ), 2)
+
+            # Monthly S/R
+            m_highs = [float(m_grp["High"].iloc[i])
+                       for i in range(len(m_grp))]
+            m_lows  = [float(m_grp["Low"].iloc[i])
+                       for i in range(len(m_grp))]
+            m_sup = round(max(
+                [l for l in m_lows if l < cp], default=cp*0.92
+            ), 2)
+            m_res = round(min(
+                [h for h in m_highs if h > cp], default=cp*1.08
+            ), 2)
+
+        except Exception:
+            w_pivot = w_r1 = w_s1 = w_r2 = w_s2 = cp
+            m_pivot = m_r1 = m_s1 = m_r2 = m_s2 = cp
+            w_sup   = round(cp * 0.97, 2)
+            w_res   = round(cp * 1.03, 2)
+            m_sup   = round(cp * 0.94, 2)
+            m_res   = round(cp * 1.06, 2)
+
         # ── SL and Targets ────────────────────────────────
         # Entry logic:
         # If current price is ABOVE EMA9 → entry = current price (already above EMA9)
@@ -2412,6 +2511,55 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
             patterns.append((
                 f"💪 {'Bull' if bias=='bullish' else 'Bear'} Marubozu",
                 bias, "Strong momentum — continuation likely"))
+
+        # ── Additional patterns ────────────────────────────
+        # Three White Soldiers — 3 consecutive bullish candles
+        try:
+            c3v = float(c.iloc[-4]); o3v = float(o.iloc[-4])
+            if (c2v>o2v and c1v>o1v and cp>float(o.iloc[-1]) and
+                    c2v>c3v and c1v>c2v and cp>c1v and
+                    abs(c2v-o2v)>avg_b*0.7 and
+                    abs(c1v-o1v)>avg_b*0.7):
+                patterns.append((
+                    "🪖 Three White Soldiers", "bullish",
+                    "3 strong bullish candles — powerful uptrend"
+                ))
+        except Exception:
+            pass
+
+        # Three Black Crows — 3 consecutive bearish candles
+        try:
+            if (c2v<o2v and c1v<o1v and cp<float(o.iloc[-1]) and
+                    c2v<c3v and c1v<c2v and cp<c1v and
+                    abs(c2v-o2v)>avg_b*0.7 and
+                    abs(c1v-o1v)>avg_b*0.7):
+                patterns.append((
+                    "🐦 Three Black Crows", "bearish",
+                    "3 strong bearish candles — powerful downtrend"
+                ))
+        except Exception:
+            pass
+
+        # Inside Bar (NR7) — candle inside previous candle
+        if (float(h.iloc[-1]) < h1v and
+                float(l.iloc[-1]) > l1v):
+            patterns.append((
+                "📦 Inside Bar", "neutral",
+                "Price consolidating — breakout imminent. "
+                "Buy direction of breakout."
+            ))
+
+        # Pin Bar — long wick rejection candle
+        if lw > body0 * 3 and uw < body0 * 0.5:
+            patterns.append((
+                "📌 Bullish Pin Bar", "bullish",
+                "Strong rejection of lows — buyers in control"
+            ))
+        if uw > body0 * 3 and lw < body0 * 0.5:
+            patterns.append((
+                "📌 Bearish Pin Bar", "bearish",
+                "Strong rejection of highs — sellers in control"
+            ))
 
         # ── 11-FACTOR CHECKLIST ───────────────────────────
         # Each factor: (label, passed, value_str, why)
@@ -2588,10 +2736,19 @@ def compute_all(df: pd.DataFrame, lp: dict) -> dict | None:
             up_conds=up_conds, dn_conds=dn_conds,
             rv=rv, adxv=adxv, atrv=atrv,
             e9v=e9v, e21v=e21v, e50v=e50v, vwv=vwv,
+            vwap_upper=vwap_upper, vwap_lower=vwap_lower,
+            vwap_u2=vwap_u2, vwap_l2=vwap_l2,
+            vwap_zone=vwap_zone,
             bbup=bbup, bblw=bblw, cmfv=cmfv,
             vol_ratio=vol_ratio, vsurge=vsurge,
             obv_bull=obv_bull, rr_ratio=rr_ratio,
             sup=sup, res=res,
+            # Weekly levels
+            w_pivot=w_pivot, w_r1=w_r1, w_s1=w_s1,
+            w_r2=w_r2, w_s2=w_s2, w_sup=w_sup, w_res=w_res,
+            # Monthly levels
+            m_pivot=m_pivot, m_r1=m_r1, m_s1=m_s1,
+            m_r2=m_r2, m_s2=m_s2, m_sup=m_sup, m_res=m_res,
             sl_long=sl_long, sl_short=sl_short,
             tgt1=tgt1, tgt2=tgt2, tgt3=tgt3,
             tgt1s=tgt1s, tgt2s=tgt2s, tgt3s=tgt3s,
@@ -3958,6 +4115,30 @@ with T2:
         name="VWAP"
     ), row=1, col=1)
 
+    # VWAP Bands on chart
+    if sig and sig.get("vwap_upper"):
+        _vw_vals = sig["vwaps"].tail(100)
+        _std_ser = sig["rsis"].tail(100) * 0  # zero series for shift
+        try:
+            _vw_std = float(sig["vwaps"].tail(20).std())
+            _vw_up  = _vw_vals + _vw_std
+            _vw_dn  = _vw_vals - _vw_std
+            fig.add_trace(go.Scatter(
+                x=plot_df.index[-100:], y=_vw_up,
+                line=dict(color="rgba(251,191,36,0.5)", width=1, dash="dot"),
+                name="VWAP +1SD", showlegend=True
+            ), row=1, col=1)
+            fig.add_trace(go.Scatter(
+                x=plot_df.index[-100:], y=_vw_dn,
+                line=dict(color="rgba(251,191,36,0.5)", width=1, dash="dot"),
+                name="VWAP -1SD",
+                fill="tonexty",
+                fillcolor="rgba(251,191,36,0.03)",
+                showlegend=True
+            ), row=1, col=1)
+        except Exception:
+            pass
+
     # Bollinger Bands on chart
     if sig:
         # Calculate BB series for chart
@@ -4019,6 +4200,42 @@ with T2:
                     line_width=1,
                     opacity=0.5,
                     annotation_text=fib_name,
+                    annotation_position="right",
+                    row=1, col=1
+                )
+
+    # Weekly Pivot lines on chart
+    if sig and sig.get("w_pivot"):
+        _wp_levels = [
+            (sig["w_pivot"], "W.Pivot", "#a78bfa", "dash"),
+            (sig["w_r1"],    "W.R1",    "#f87171", "dot"),
+            (sig["w_s1"],    "W.S1",    "#4ade80", "dot"),
+        ]
+        for _wv, _wn, _wc, _wd in _wp_levels:
+            if abs(_wv - sig["cp"]) / sig["cp"] < 0.05:
+                fig.add_hline(
+                    y=_wv, line_dash=_wd,
+                    line_color=_wc, line_width=1,
+                    opacity=0.6,
+                    annotation_text=_wn,
+                    annotation_position="left",
+                    row=1, col=1
+                )
+
+    # Monthly Pivot lines on chart
+    if sig and sig.get("m_pivot"):
+        _mp_lvls = [
+            (sig["m_pivot"], "M.Pivot", "#818cf8", "longdash"),
+            (sig["m_r1"],    "M.R1",    "#f43f5e", "longdashdot"),
+            (sig["m_s1"],    "M.S1",    "#34d399", "longdashdot"),
+        ]
+        for _mv, _mn, _mc, _md in _mp_lvls:
+            if abs(_mv - sig["cp"]) / sig["cp"] < 0.08:
+                fig.add_hline(
+                    y=_mv, line_dash=_md,
+                    line_color=_mc, line_width=1.5,
+                    opacity=0.5,
+                    annotation_text=_mn,
                     annotation_position="right",
                     row=1, col=1
                 )
@@ -4180,6 +4397,93 @@ with T2:
     kl4.metric("EMA9",       f"₹{sig['e9v']:,.0f}")
     kl5.metric("EMA21",      f"₹{sig['e21v']:,.0f}")
     kl6.metric("ATR",        f"₹{sig['atrv']:,.1f}")
+
+    # ── Weekly & Monthly Pivot Levels ─────────────────────
+    st.markdown("#### 📅 Weekly & Monthly Key Levels")
+    st.caption(
+        "These levels are used by institutions for swing trades. "
+        "Weekly for 1-3 day trades, Monthly for monthly options."
+    )
+
+    wm1, wm2 = st.columns(2)
+    with wm1:
+        st.markdown("**📅 Weekly Levels**")
+        w_items = [
+            ("W.Pivot", sig.get("w_pivot", 0), "#7c3aed"),
+            ("W.R1 (Resistance)", sig.get("w_r1", 0), "#dc2626"),
+            ("W.R2 (Resistance)", sig.get("w_r2", 0), "#dc2626"),
+            ("W.S1 (Support)",    sig.get("w_s1", 0), "#16a34a"),
+            ("W.S2 (Support)",    sig.get("w_s2", 0), "#16a34a"),
+            ("Weekly High (Res)", sig.get("w_res", 0), "#dc2626"),
+            ("Weekly Low (Sup)",  sig.get("w_sup", 0), "#16a34a"),
+        ]
+        for _wn, _wv, _wc in w_items:
+            if _wv > 0:
+                _is_near = abs(_wv - sig["cp"]) / sig["cp"] < 0.01
+                st.markdown(
+                    f"<div style='display:flex;justify-content:"
+                    f"space-between;padding:5px 8px;"
+                    f"background:{'#faf5ff' if _is_near else '#f8fafc'};"
+                    f"border-radius:6px;margin:2px 0;"
+                    f"border:{'1.5px solid '+_wc if _is_near else 'none'}'>"
+                    f"<span style='font-size:12px;color:#64748b'>"
+                    f"{_wn}{'  ◀ NEAR' if _is_near else ''}</span>"
+                    f"<span style='font-size:13px;font-weight:700;"
+                    f"color:{_wc}'>₹{_wv:,.0f}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+    with wm2:
+        st.markdown("**🗓️ Monthly Levels**")
+        m_items = [
+            ("M.Pivot", sig.get("m_pivot", 0), "#7c3aed"),
+            ("M.R1 (Resistance)", sig.get("m_r1", 0), "#dc2626"),
+            ("M.R2 (Resistance)", sig.get("m_r2", 0), "#dc2626"),
+            ("M.S1 (Support)",    sig.get("m_s1", 0), "#16a34a"),
+            ("M.S2 (Support)",    sig.get("m_s2", 0), "#16a34a"),
+            ("Monthly High (Res)",sig.get("m_res", 0), "#dc2626"),
+            ("Monthly Low (Sup)", sig.get("m_sup", 0), "#16a34a"),
+        ]
+        for _mn, _mv, _mc in m_items:
+            if _mv > 0:
+                _is_near = abs(_mv - sig["cp"]) / sig["cp"] < 0.02
+                st.markdown(
+                    f"<div style='display:flex;justify-content:"
+                    f"space-between;padding:5px 8px;"
+                    f"background:{'#eff6ff' if _is_near else '#f8fafc'};"
+                    f"border-radius:6px;margin:2px 0;"
+                    f"border:{'1.5px solid '+_mc if _is_near else 'none'}'>"
+                    f"<span style='font-size:12px;color:#64748b'>"
+                    f"{_mn}{'  ◀ NEAR' if _is_near else ''}</span>"
+                    f"<span style='font-size:13px;font-weight:700;"
+                    f"color:{_mc}'>₹{_mv:,.0f}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+    # VWAP Bands display
+    _vz = sig.get("vwap_zone", "FAIR_VALUE")
+    _vz_map = {
+        "EXTREME_OB": ("🔴 EXTREME OVERBOUGHT — +2SD above VWAP", "#dc2626", "#fef2f2"),
+        "OVERBOUGHT": ("🟠 OVERBOUGHT — +1SD above VWAP", "#ea580c", "#fff7ed"),
+        "FAIR_VALUE": ("🟢 FAIR VALUE — Inside VWAP bands", "#16a34a", "#f0fdf4"),
+        "OVERSOLD":   ("🟢 OVERSOLD — -1SD below VWAP. CE entry zone!", "#16a34a", "#f0fdf4"),
+        "EXTREME_OS": ("🔥 EXTREME OVERSOLD — -2SD below VWAP. Strong CE entry!", "#7c3aed", "#faf5ff"),
+    }
+    _vz_label, _vz_col, _vz_bg = _vz_map.get(_vz, ("Normal", "#374151", "#f8fafc"))
+    vb1, vb2, vb3, vb4 = st.columns(4)
+    vb1.metric("VWAP", f"₹{sig['vwv']:,.0f}")
+    vb2.metric("VWAP +1SD", f"₹{sig.get('vwap_upper', sig['vwv']):,.0f}")
+    vb3.metric("VWAP -1SD", f"₹{sig.get('vwap_lower', sig['vwv']):,.0f}")
+    vb4.metric("Zone", _vz.replace("_"," "))
+    st.markdown(
+        f"<div style='background:{_vz_bg};"
+        f"border:1px solid {_vz_col};"
+        f"border-radius:8px;padding:8px 14px;"
+        f"font-size:13px;color:{_vz_col};margin-bottom:8px'>"
+        f"<b>VWAP Bands:</b> {_vz_label}</div>",
+        unsafe_allow_html=True
+    )
 
     # Bollinger Bands display
     _bb_mid_v = round((sig["bbup"] + sig["bblw"]) / 2, 2)
@@ -8837,6 +9141,46 @@ with T7:
                 })
 
             if rows:
+                # ── Max Pain Calculation ───────────────────
+                # Max Pain = strike where total option buyers lose most
+                df_chain_full = pd.DataFrame(rows)
+                max_pain_val  = spot  # default
+                min_pain_loss = float("inf")
+
+                for _mp_strike in df_chain_full["Strike"].values:
+                    _total_loss = 0
+                    for _, _row in df_chain_full.iterrows():
+                        _s = _row["Strike"]
+                        _ce_oi = _row["CE OI"]
+                        _pe_oi = _row["PE OI"]
+                        # CE buyer loses if strike > current
+                        if _mp_strike > _s:
+                            _total_loss += (_mp_strike - _s) * _ce_oi
+                        # PE buyer loses if strike < current
+                        if _mp_strike < _s:
+                            _total_loss += (_s - _mp_strike) * _pe_oi
+                    if _total_loss < min_pain_loss:
+                        min_pain_loss = _total_loss
+                        max_pain_val  = _mp_strike
+
+                # Distance from spot to Max Pain
+                _mp_dist  = max_pain_val - spot
+                _mp_dir   = "above" if max_pain_val > spot else "below"
+                _mp_pct   = round(abs(_mp_dist) / spot * 100, 2)
+
+                # Expected Move
+                # Use ATM straddle price as proxy
+                _atm_row = next(
+                    (r for r in rows if r["Strike"] == atm), None
+                )
+                _exp_move = 0
+                _exp_move_pct = 0
+                if _atm_row:
+                    _atm_ce = _atm_row["CE LTP"]
+                    _atm_pe = _atm_row["PE LTP"]
+                    _exp_move = round(_atm_ce + _atm_pe, 2)
+                    _exp_move_pct = round(_exp_move / spot * 100, 2)
+
                 # PCR
                 pcr = round(total_put_oi / (total_call_oi + 1), 2)
                 pcr_signal = (
@@ -8847,7 +9191,7 @@ with T7:
                     "🟡 Neutral"
                 )
 
-                pm1, pm2, pm3 = st.columns(3)
+                pm1,pm2,pm3,pm4,pm5 = st.columns(5)
                 pm1.metric("Total Call OI", f"{total_call_oi:,}")
                 pm2.metric("Total Put OI",  f"{total_put_oi:,}")
                 pm3.metric(
@@ -8856,6 +9200,64 @@ with T7:
                     delta=pcr_signal,
                     delta_color="normal" if pcr > 1 else "inverse"
                 )
+                pm4.metric(
+                    "Max Pain",
+                    f"₹{max_pain_val:,}",
+                    delta=f"{_mp_pct:.1f}% {_mp_dir} spot",
+                    help="Strike where option buyers lose most. "
+                         "Price tends to move toward Max Pain on expiry."
+                )
+                pm5.metric(
+                    "Expected Move",
+                    f"₹{_exp_move:,.0f}",
+                    delta=f"±{_exp_move_pct:.1f}% from spot",
+                    help="ATM straddle price = how much market "
+                         "expects index to move by expiry."
+                )
+
+                # Max Pain interpretation
+                _mp_color = "#7c3aed"
+                if abs(_mp_dist) < step * 2:
+                    st.info(
+                        f"📍 Max Pain at ₹{max_pain_val:,} — "
+                        f"Very close to spot ₹{spot:,.0f}. "
+                        f"Market likely to stay range-bound near "
+                        f"this level by expiry."
+                    )
+                elif max_pain_val < spot:
+                    st.warning(
+                        f"📍 Max Pain at ₹{max_pain_val:,} — "
+                        f"₹{abs(_mp_dist):,.0f} BELOW spot. "
+                        f"Sellers may push market down toward "
+                        f"₹{max_pain_val:,} by expiry. "
+                        f"Be cautious with CE trades far above Max Pain."
+                    )
+                else:
+                    st.success(
+                        f"📍 Max Pain at ₹{max_pain_val:,} — "
+                        f"₹{abs(_mp_dist):,.0f} ABOVE spot. "
+                        f"Market may be supported and move up toward "
+                        f"₹{max_pain_val:,} by expiry. "
+                        f"Supports CE trades."
+                    )
+
+                # Expected Move interpretation
+                if _exp_move > 0:
+                    st.markdown(
+                        f"<div style='background:#faf5ff;"
+                        f"border:1px solid #c4b5fd;"
+                        f"border-radius:8px;padding:10px 16px;"
+                        f"font-size:13px;color:#6d28d9;"
+                        f"margin-bottom:8px'>"
+                        f"<b>Expected Move:</b> Market expects "
+                        f"{oc_symbol} to move ±₹{_exp_move:,.0f} "
+                        f"(±{_exp_move_pct:.1f}%) from current spot "
+                        f"₹{spot:,.0f} by expiry {sel_exp}. "
+                        f"Upper range: ₹{spot+_exp_move:,.0f} | "
+                        f"Lower range: ₹{spot-_exp_move:,.0f}"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
 
                 # Show chain near ATM (±10 strikes)
                 df_chain = pd.DataFrame(rows)
@@ -9750,10 +10152,26 @@ with T9:
                     2
                 )
 
+                # VWAP Zone in Signal Hub
+                _hz = hub_sig.get("vwap_zone","FAIR_VALUE")
+                _hz_map = {
+                    "EXTREME_OB": ("🔴 Extreme Overbought", "#dc2626"),
+                    "OVERBOUGHT": ("🟠 Overbought", "#ea580c"),
+                    "FAIR_VALUE": ("🟢 Fair Value", "#16a34a"),
+                    "OVERSOLD":   ("🟢 Oversold — CE Entry!", "#16a34a"),
+                    "EXTREME_OS": ("💎 Extreme Oversold!", "#7c3aed"),
+                }
+                _hz_lbl, _hz_col = _hz_map.get(
+                    _hz, ("Normal", "#374151")
+                )
+
                 levels = [
                     ("Current Price",
                      f"₹{hub_sig['cp']:,.2f}",
                      "#374151"),
+                    ("VWAP Zone",
+                     _hz_lbl,
+                     _hz_col),
                     ("Entry Zone",
                      f"₹{_hub_entry:,.2f}",
                      "#16a34a"),
@@ -9786,6 +10204,92 @@ with T9:
                         unsafe_allow_html=True
                     )
                 st.markdown("</div>", unsafe_allow_html=True)
+
+            # ── Expected Move Calculator ──────────────────
+            st.markdown("---")
+            st.markdown("#### 📐 Expected Move Calculator")
+            em1, em2, em3 = st.columns(3)
+            with em1:
+                em_opt_price = st.number_input(
+                    "Option premium you plan to pay (₹)",
+                    value=100.0, step=5.0, key="em_opt_price"
+                )
+                em_delta = st.slider(
+                    "Estimated Delta",
+                    0.1, 0.9, 0.5, 0.05,
+                    key="em_delta",
+                    help="ATM=0.5, ITM=0.6-0.8, OTM=0.2-0.4"
+                )
+            with em2:
+                em_lot = st.number_input(
+                    "Lot size", value=50, key="em_lot"
+                )
+                em_lots = st.number_input(
+                    "Number of lots", value=1, key="em_lots"
+                )
+            with em3:
+                em_target_pct = st.slider(
+                    "Target profit on option (%)",
+                    10, 200, 50, 10, key="em_target_pct"
+                )
+
+            if em_opt_price > 0 and em_delta > 0:
+                _em_stock_move = round(em_opt_price / em_delta, 2)
+                _em_target_opt = round(em_opt_price * (1 + em_target_pct/100), 2)
+                _em_target_move= round(_em_target_opt / em_delta, 2)
+                _em_sl_opt     = round(em_opt_price * 0.5, 2)
+                _em_sl_move    = round(em_opt_price * 0.5 / em_delta, 2)
+                _em_total_risk = round(em_opt_price * em_lot * em_lots, 2)
+                _em_total_gain = round(
+                    (em_opt_price * em_target_pct/100) * em_lot * em_lots, 2
+                )
+
+                st.markdown(
+                    f"<div style='background:#faf5ff;"
+                    f"border:1.5px solid #7c3aed;"
+                    f"border-radius:12px;padding:16px;"
+                    f"margin-bottom:8px'>"
+                    f"<div style='font-size:13px;font-weight:700;"
+                    f"color:#6d28d9;margin-bottom:10px'>"
+                    f"Expected Move Analysis</div>"
+                    f"<div style='display:grid;"
+                    f"grid-template-columns:repeat(3,1fr);gap:10px'>"
+
+                    f"<div style='background:white;border-radius:8px;"
+                    f"padding:10px;text-align:center'>"
+                    f"<div style='font-size:10px;color:#64748b'>"
+                    f"Stock must move</div>"
+                    f"<div style='font-size:18px;font-weight:700;"
+                    f"color:#dc2626'>₹{_em_stock_move:,.0f}</div>"
+                    f"<div style='font-size:10px;color:#64748b'>"
+                    f"just to break even</div></div>"
+
+                    f"<div style='background:white;border-radius:8px;"
+                    f"padding:10px;text-align:center'>"
+                    f"<div style='font-size:10px;color:#64748b'>"
+                    f"For {em_target_pct}% profit</div>"
+                    f"<div style='font-size:18px;font-weight:700;"
+                    f"color:#16a34a'>₹{_em_target_move:,.0f}</div>"
+                    f"<div style='font-size:10px;color:#64748b'>"
+                    f"stock move needed</div></div>"
+
+                    f"<div style='background:white;border-radius:8px;"
+                    f"padding:10px;text-align:center'>"
+                    f"<div style='font-size:10px;color:#64748b'>"
+                    f"Total investment</div>"
+                    f"<div style='font-size:18px;font-weight:700;"
+                    f"color:#374151'>₹{_em_total_risk:,.0f}</div>"
+                    f"<div style='font-size:10px;color:#16a34a'>"
+                    f"Target P&L: ₹{_em_total_gain:+,.0f}</div></div>"
+
+                    f"</div>"
+                    f"<div style='font-size:12px;color:#6d28d9;"
+                    f"margin-top:10px'>"
+                    f"50% SL on option = stock reverses ₹{_em_sl_move:,.0f} | "
+                    f"Option SL at ₹{_em_sl_opt:,.0f}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
 
             # ── Confirmation checklist ─────────────────────
             st.markdown("---")

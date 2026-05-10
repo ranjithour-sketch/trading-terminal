@@ -230,6 +230,7 @@ TAB_ROUTES = {
     "options":   8,
     "backtest":  9,
     "hub":       10,
+    "manager":   11,
 }
 TAB_NAMES = [
     "📋 Watchlist",
@@ -243,8 +244,9 @@ TAB_NAMES = [
     "🔗 Options Chain",
     "🧪 Backtest",
     "🎯 Signal Hub",
+    "🛡️ Trade Manager",
 ]
-TAB_ICONS = ["📋","🎯","🔍","🤖","🏦","🧮","📰","📊","🔗","🧪","🎯"]
+TAB_ICONS = ["📋","🎯","🔍","🤖","🏦","🧮","📰","📊","🔗","🧪","🎯","🛡️"]
 TAB_KEYS  = list(TAB_ROUTES.keys())
 
 # Read current tab from URL
@@ -2768,6 +2770,7 @@ with st.expander("Open any tab in a separate browser window"):
         ("🔗 Options",      "options",   "#7c3aed"),
         ("🧪 Backtest",     "backtest",  "#1d4ed8"),
         ("🎯 Signal Hub",   "hub",       "#0f766e"),
+        ("🛡️ Trade Manager","manager",   "#1e3a5f"),
     ]
     for idx, (lname, lkey, lcolor) in enumerate(link_data):
         col_idx = idx % 5
@@ -3061,7 +3064,7 @@ stick = st.session_state["st"]
 # ══════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════
-T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11 = st.tabs(TAB_NAMES)
+T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,T12 = st.tabs(TAB_NAMES)
 
 # ── Reusable inline stock search widget ──────────────────
 def inline_stock_search(tab_key: str):
@@ -9630,6 +9633,554 @@ with T11:
                         st.success("✅ Full analysis sent!")
                     else:
                         st.error("❌ Failed to send")
+
+
+# ╔══════════════════════════════════════════════════════╗
+# ║  TAB 12 — TRADE MANAGER                             ║
+# ╚══════════════════════════════════════════════════════╝
+with T12:
+    st.markdown("### 🛡️ Trade Manager — Active Trade Monitor")
+    st.caption(
+        "Add your active trades here. The system monitors each trade "
+        "every candle and tells you HOLD / REDUCE / EXIT with full "
+        "reasoning. Signals never disappear silently."
+    )
+
+    # ── Initialize trade store ─────────────────────────────
+    if "active_trades" not in st.session_state:
+        st.session_state["active_trades"] = []
+
+    # ── Add new trade ──────────────────────────────────────
+    with st.expander(
+        "➕ Add New Trade",
+        expanded=len(st.session_state["active_trades"]) == 0
+    ):
+        af1, af2, af3 = st.columns(3)
+        with af1:
+            tm_stock = st.text_input(
+                "Stock name", value="NIFTY 50", key="tm_stock"
+            )
+            tm_sym  = STOCKS.get(tm_stock, "^NSEI")
+            tm_type = st.selectbox(
+                "Signal type", ["BUY CE","BUY PE"], key="tm_type"
+            )
+            tm_style = st.selectbox(
+                "Trade style",
+                ["Intraday (exit 2:45 PM)",
+                 "Swing 1 day",
+                 "Swing 3 days",
+                 "Swing 1 week"],
+                key="tm_style"
+            )
+        with af2:
+            tm_entry  = st.number_input(
+                "Entry price (₹)", value=0.0,
+                step=0.5, key="tm_entry"
+            )
+            tm_sl     = st.number_input(
+                "Stop loss (₹)", value=0.0,
+                step=0.5, key="tm_sl"
+            )
+            tm_target = st.number_input(
+                "Target (₹)", value=0.0,
+                step=0.5, key="tm_target"
+            )
+        with af3:
+            tm_lots = st.number_input(
+                "Lots", value=1, min_value=1, key="tm_lots"
+            )
+            tm_tf   = st.selectbox(
+                "Timeframe", ["15m","1h","1d"], key="tm_tf"
+            )
+            tm_opt_price = st.number_input(
+                "Option premium paid (₹)",
+                value=0.0, step=0.5, key="tm_opt_price",
+                help="Price you paid for the CE/PE option"
+            )
+
+        if st.button(
+            "Add Trade to Monitor",
+            type="primary", key="tm_add",
+            use_container_width=True
+        ):
+            if tm_entry > 0 and tm_sl > 0 and tm_target > 0:
+                import datetime as _dt2
+                st.session_state["active_trades"].append({
+                    "id":           len(st.session_state["active_trades"])+1,
+                    "stock":        tm_stock,
+                    "sym":          tm_sym,
+                    "type":         tm_type,
+                    "entry":        tm_entry,
+                    "sl":           tm_sl,
+                    "target":       tm_target,
+                    "lots":         tm_lots,
+                    "lots_rem":     tm_lots,
+                    "style":        tm_style,
+                    "tf":           tm_tf,
+                    "opt_price":    tm_opt_price,
+                    "added_at":     _dt2.datetime.now().strftime("%d %b %H:%M"),
+                    "status":       "ACTIVE",
+                    "last_action":  "Trade added",
+                })
+                st.success(
+                    f"✅ {tm_stock} {tm_type} added to Trade Manager!"
+                )
+                st.rerun()
+            else:
+                st.error(
+                    "Please fill Entry, Stop Loss and Target."
+                )
+
+    # ── Monitor active trades ──────────────────────────────
+    trades = st.session_state.get("active_trades", [])
+    active = [t for t in trades if t["status"] == "ACTIVE"]
+    closed = [t for t in trades if t["status"] != "ACTIVE"]
+
+    if not active:
+        st.info(
+            "No active trades being monitored. "
+            "Add a trade above after entering on Zerodha."
+        )
+    else:
+        st.markdown(f"### 📊 Monitoring {len(active)} active trade(s)")
+
+        for idx, trade in enumerate(active):
+            st.markdown("---")
+
+            # Fetch live data
+            with st.spinner(f"Analysing {trade['stock']}..."):
+                tm_lp  = live_price(trade["sym"])
+                tm_df  = candles(trade["sym"], trade["tf"])
+                tm_sig = None
+                if tm_df is not None and len(tm_df) >= 55:
+                    try:
+                        tm_sig = compute_all(tm_df, tm_lp)
+                    except Exception:
+                        pass
+
+            cp_now  = tm_lp["p"] if tm_lp["ok"] else trade["entry"]
+            is_ce   = trade["type"] == "BUY CE"
+            direction = "UPTREND" if is_ce else "DOWNTREND"
+
+            # P&L on stock price
+            pnl_pts = (
+                (cp_now - trade["entry"]) if is_ce
+                else (trade["entry"] - cp_now)
+            )
+            pnl_pct = round(pnl_pts / trade["entry"] * 100, 2)
+            pnl_col = "#16a34a" if pnl_pts >= 0 else "#dc2626"
+
+            # SL / Target hit
+            sl_hit  = (
+                (cp_now <= trade["sl"]) if is_ce
+                else (cp_now >= trade["sl"])
+            )
+            tgt_hit = (
+                (cp_now >= trade["target"]) if is_ce
+                else (cp_now <= trade["target"])
+            )
+
+            # ── Strength analysis ──────────────────────────
+            strength = 0
+            confirms = []
+            warnings = []
+
+            if tm_sig:
+                cur_dir   = tm_sig["direction"]
+                cur_score = max(tm_sig["up_score"], tm_sig["dn_score"])
+
+                # Direction
+                if cur_dir == direction:
+                    strength += 2
+                    confirms.append(f"Trend still {direction}")
+                else:
+                    strength -= 2
+                    warnings.append(f"Trend changed to {cur_dir}")
+
+                # Score
+                if cur_score >= 7:
+                    strength += 2
+                    confirms.append(f"Score {cur_score}/10 strong")
+                elif cur_score >= 5:
+                    strength += 1
+                    confirms.append(f"Score {cur_score}/10 moderate")
+                else:
+                    strength -= 1
+                    warnings.append(f"Score {cur_score}/10 weak")
+
+                # RSI
+                rsi = tm_sig["rv"]
+                if is_ce and rsi > 50:
+                    strength += 1
+                    confirms.append(f"RSI bullish {rsi:.0f}")
+                elif not is_ce and rsi < 50:
+                    strength += 1
+                    confirms.append(f"RSI bearish {rsi:.0f}")
+                else:
+                    strength -= 1
+                    warnings.append(f"RSI against trade {rsi:.0f}")
+
+                # VWAP
+                if is_ce and cp_now > tm_sig["vwv"]:
+                    strength += 1
+                    confirms.append("Price above VWAP")
+                elif not is_ce and cp_now < tm_sig["vwv"]:
+                    strength += 1
+                    confirms.append("Price below VWAP")
+                else:
+                    warnings.append("Price crossed VWAP against trade")
+
+                # EMA21
+                if is_ce and cp_now > tm_sig["e21v"]:
+                    strength += 1
+                    confirms.append("Price above EMA21")
+                elif not is_ce and cp_now < tm_sig["e21v"]:
+                    strength += 1
+                    confirms.append("Price below EMA21")
+                else:
+                    warnings.append("Price crossed EMA21 against trade")
+
+                # Supertrend
+                st_ok = (
+                    (is_ce and tm_sig.get("st_bull", True)) or
+                    (not is_ce and not tm_sig.get("st_bull", True))
+                )
+                if st_ok:
+                    strength += 1
+                    confirms.append("Supertrend confirms")
+                else:
+                    warnings.append("Supertrend flipped against trade")
+
+                # MACD
+                macd_ok = (
+                    (is_ce  and tm_sig["mv"] > tm_sig["msv"]) or
+                    (not is_ce and tm_sig["mv"] < tm_sig["msv"])
+                )
+                if macd_ok:
+                    strength += 1
+                    confirms.append("MACD confirms")
+                else:
+                    warnings.append("MACD turned against trade")
+
+                # Volume
+                if tm_sig["vsurge"]:
+                    strength += 1
+                    confirms.append(
+                        f"Volume surge {tm_sig['vol_ratio']:.1f}x"
+                    )
+
+            # ── MTF check ──────────────────────────────────
+            mtf_1h = "UNKNOWN"
+            try:
+                df_1h = candles(trade["sym"], "1h")
+                if df_1h is not None and len(df_1h) >= 55:
+                    sig_1h = compute_all(df_1h, tm_lp)
+                    if sig_1h:
+                        mtf_1h = sig_1h["direction"]
+                        if mtf_1h == direction:
+                            strength += 1
+                            confirms.append("1h timeframe agrees")
+                        else:
+                            warnings.append(f"1h says {mtf_1h}")
+            except Exception:
+                pass
+
+            # ── Noise vs reversal detection ─────────────────
+            # Key logic: distinguish temporary weakness from real reversal
+            # Real reversal = 3+ warnings AND score < 5 AND VWAP crossed
+            real_reversal = (
+                len(warnings) >= 3 and
+                (tm_sig["up_score"] if is_ce else tm_sig["dn_score"]) < 5
+                if tm_sig else False
+            )
+            temp_weakness = (
+                len(warnings) >= 2 and not real_reversal
+            )
+
+            # ── Holding time recommendation ─────────────────
+            style = trade["style"]
+            if "Intraday" in style:
+                hold_advice = "Exit by 2:45 PM regardless"
+                max_hold    = "Today only"
+            elif "1 day" in style:
+                hold_advice = "Review tomorrow morning"
+                max_hold    = "1 trading day"
+            elif "3 days" in style:
+                hold_advice = "Review every morning for 3 days"
+                max_hold    = "3 trading days"
+            else:
+                hold_advice = "Review every morning for 1 week"
+                max_hold    = "5 trading days"
+
+            # ── Final verdict ───────────────────────────────
+            if sl_hit:
+                verdict     = "🔴 EXIT NOW — STOP LOSS HIT"
+                v_col       = "#dc2626"
+                v_bg        = "#fef2f2"
+                v_action    = "Exit immediately on Zerodha. No waiting."
+                trade["status"] = "CLOSED — SL HIT"
+            elif tgt_hit:
+                verdict     = "🟢 EXIT NOW — TARGET HIT"
+                v_col       = "#16a34a"
+                v_bg        = "#f0fdf4"
+                v_action    = "Book full profit. Excellent trade!"
+                trade["status"] = "CLOSED — TARGET HIT"
+            elif real_reversal:
+                verdict     = "🔴 EXIT NOW — TREND REVERSED"
+                v_col       = "#dc2626"
+                v_bg        = "#fef2f2"
+                v_action    = (
+                    "This is a real reversal not noise. "
+                    "Exit full position immediately."
+                )
+            elif temp_weakness:
+                verdict     = "🟡 REDUCE — TEMPORARY WEAKNESS"
+                v_col       = "#d97706"
+                v_bg        = "#fffbeb"
+                v_action    = (
+                    "Exit 50% now to protect profit/reduce loss. "
+                    "Hold remaining 50% with tight stop."
+                )
+            elif strength >= 6:
+                verdict     = "🟢 HOLD — STRONG SIGNAL"
+                v_col       = "#16a34a"
+                v_bg        = "#f0fdf4"
+                v_action    = (
+                    f"Hold full position. {hold_advice}."
+                )
+            elif strength >= 3:
+                verdict     = "🟡 HOLD WITH CAUTION"
+                v_col       = "#d97706"
+                v_bg        = "#fffbeb"
+                v_action    = (
+                    "Signal still valid but weakening. "
+                    "Trail stop loss closer to current price."
+                )
+            else:
+                verdict     = "🟠 REDUCE — SIGNAL WEAKENING"
+                v_col       = "#ea580c"
+                v_bg        = "#fff7ed"
+                v_action    = (
+                    "Exit 50% now. Move SL to breakeven for rest."
+                )
+
+            # ── Display trade card ──────────────────────────
+            st.markdown(
+                f"<div style='background:{v_bg};"
+                f"border:2px solid {v_col};"
+                f"border-radius:14px;padding:20px;"
+                f"margin-bottom:8px'>"
+
+                # Header row
+                f"<div style='display:flex;justify-content:"
+                f"space-between;align-items:center;"
+                f"flex-wrap:wrap;gap:8px;margin-bottom:14px'>"
+                f"<div>"
+                f"<span style='font-size:20px;font-weight:700;"
+                f"color:#1e293b'>{trade['stock']}</span>"
+                f"<span style='background:#1e293b;color:white;"
+                f"padding:3px 10px;border-radius:10px;"
+                f"font-size:12px;margin-left:8px'>"
+                f"{trade['type']}</span>"
+                f"<span style='font-size:11px;color:#64748b;"
+                f"margin-left:8px'>Added {trade['added_at']}"
+                f" | {trade['style']}</span>"
+                f"</div>"
+                f"<div style='font-size:20px;font-weight:700;"
+                f"color:{pnl_col}'>"
+                f"{pnl_pts:+.2f} pts ({pnl_pct:+.2f}%)"
+                f"</div></div>"
+
+                # Verdict banner
+                f"<div style='background:{v_col};color:white;"
+                f"border-radius:8px;padding:12px 16px;"
+                f"margin-bottom:12px'>"
+                f"<div style='font-size:18px;font-weight:700'>"
+                f"{verdict}</div>"
+                f"<div style='font-size:13px;margin-top:4px'>"
+                f"{v_action}</div>"
+                f"</div>"
+
+                # Price levels
+                f"<div style='display:grid;"
+                f"grid-template-columns:repeat(5,1fr);"
+                f"gap:8px;margin-bottom:12px'>"
+
+                f"<div style='background:white;border-radius:8px;"
+                f"padding:10px;text-align:center'>"
+                f"<div style='font-size:10px;color:#64748b'>Entry</div>"
+                f"<div style='font-size:15px;font-weight:700;"
+                f"color:#374151'>₹{trade['entry']:,.2f}</div></div>"
+
+                f"<div style='background:white;border-radius:8px;"
+                f"padding:10px;text-align:center'>"
+                f"<div style='font-size:10px;color:#64748b'>"
+                f"Current</div>"
+                f"<div style='font-size:15px;font-weight:700;"
+                f"color:{pnl_col}'>₹{cp_now:,.2f}</div></div>"
+
+                f"<div style='background:#fef2f2;border-radius:8px;"
+                f"padding:10px;text-align:center'>"
+                f"<div style='font-size:10px;color:#64748b'>SL</div>"
+                f"<div style='font-size:15px;font-weight:700;"
+                f"color:#dc2626'>₹{trade['sl']:,.2f}</div></div>"
+
+                f"<div style='background:#f0fdf4;border-radius:8px;"
+                f"padding:10px;text-align:center'>"
+                f"<div style='font-size:10px;color:#64748b'>"
+                f"Target</div>"
+                f"<div style='font-size:15px;font-weight:700;"
+                f"color:#16a34a'>₹{trade['target']:,.2f}</div></div>"
+
+                f"<div style='background:#eff6ff;border-radius:8px;"
+                f"padding:10px;text-align:center'>"
+                f"<div style='font-size:10px;color:#64748b'>"
+                f"Max Hold</div>"
+                f"<div style='font-size:13px;font-weight:700;"
+                f"color:#1d4ed8'>{max_hold}</div></div>"
+                f"</div>"
+
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+            # Confirms and warnings
+            cw1, cw2 = st.columns(2)
+            with cw1:
+                if confirms:
+                    st.markdown(
+                        f"**✅ Supporting factors ({len(confirms)})**"
+                    )
+                    for c in confirms:
+                        st.markdown(
+                            f"<div style='background:#f0fdf4;"
+                            f"border-left:3px solid #86efac;"
+                            f"padding:5px 10px;margin:2px 0;"
+                            f"border-radius:0 6px 6px 0;"
+                            f"font-size:12px;color:#166534'>"
+                            f"✅ {c}</div>",
+                            unsafe_allow_html=True
+                        )
+            with cw2:
+                if warnings:
+                    st.markdown(
+                        f"**⚠️ Warning factors ({len(warnings)})**"
+                    )
+                    for w in warnings:
+                        st.markdown(
+                            f"<div style='background:#fef2f2;"
+                            f"border-left:3px solid #fca5a5;"
+                            f"padding:5px 10px;margin:2px 0;"
+                            f"border-radius:0 6px 6px 0;"
+                            f"font-size:12px;color:#991b1b'>"
+                            f"⚠️ {w}</div>",
+                            unsafe_allow_html=True
+                        )
+
+            # Noise vs reversal explanation
+            if real_reversal:
+                st.error(
+                    "🔴 REAL REVERSAL DETECTED — "
+                    "3+ factors have turned against your trade. "
+                    "This is not noise. Exit now."
+                )
+            elif temp_weakness:
+                st.warning(
+                    "🟡 TEMPORARY WEAKNESS — "
+                    "Some factors weakening but trend not broken. "
+                    "Reduce size, tighten stop loss. Watch next 2 candles."
+                )
+
+            # Action buttons
+            ab1, ab2, ab3, ab4 = st.columns(4)
+            with ab1:
+                if st.button(
+                    "✅ Mark Closed",
+                    key=f"tm_close_{idx}",
+                    use_container_width=True
+                ):
+                    trade["status"] = "CLOSED — MANUAL"
+                    st.rerun()
+            with ab2:
+                if st.button(
+                    "📉 Reduce 50%",
+                    key=f"tm_reduce_{idx}",
+                    use_container_width=True
+                ):
+                    trade["lots_rem"] = max(
+                        1, trade["lots_rem"] // 2
+                    )
+                    trade["last_action"] = "Reduced 50%"
+                    st.success(
+                        f"Reduced to {trade['lots_rem']} lots"
+                    )
+            with ab3:
+                if st.button(
+                    "🔄 Update SL",
+                    key=f"tm_update_sl_{idx}",
+                    use_container_width=True
+                ):
+                    # Trail SL to breakeven or current - ATR
+                    new_sl = (
+                        max(trade["entry"], cp_now - tm_sig["atrv"])
+                        if tm_sig and is_ce
+                        else min(trade["entry"], cp_now + tm_sig["atrv"])
+                        if tm_sig
+                        else trade["sl"]
+                    )
+                    trade["sl"] = round(new_sl, 2)
+                    st.success(f"SL trailed to ₹{trade['sl']:,.2f}")
+            with ab4:
+                if tg_configured():
+                    if st.button(
+                        "📱 Send Update",
+                        key=f"tm_tg_{idx}",
+                        use_container_width=True
+                    ):
+                        _tok = st.session_state.get(
+                            "tg_token_saved", ""
+                        )
+                        _cid = st.session_state.get(
+                            "tg_chat_saved", ""
+                        )
+                        _msg = (
+                            f"🛡️ Trade Update — {trade['stock']}\n"
+                            f"{trade['type']} | {verdict}\n"
+                            f"Entry ₹{trade['entry']:,.0f} | "
+                            f"Now ₹{cp_now:,.0f}\n"
+                            f"P&L: {pnl_pts:+.2f} pts "
+                            f"({pnl_pct:+.2f}%)\n"
+                            f"Action: {v_action}"
+                        )
+                        if send_telegram(_tok, _cid, _msg):
+                            st.success("✅ Update sent!")
+
+    # ── Closed trades ──────────────────────────────────────
+    if closed:
+        with st.expander(f"📋 Closed trades ({len(closed)})"):
+            for t in closed:
+                _fc = "#16a34a" if "TARGET" in t["status"] else "#dc2626"
+                st.markdown(
+                    f"<div style='background:#f8fafc;"
+                    f"border-left:3px solid {_fc};"
+                    f"padding:8px 14px;margin:4px 0;"
+                    f"border-radius:0 8px 8px 0;font-size:12px'>"
+                    f"<b>{t['stock']}</b> {t['type']} | "
+                    f"Entry ₹{t['entry']:,.0f} | "
+                    f"Added {t['added_at']} | "
+                    f"<b style='color:{_fc}'>{t['status']}</b>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+            if st.button(
+                "Clear closed trades",
+                key="tm_clear_closed"
+            ):
+                st.session_state["active_trades"] = [
+                    t for t in trades
+                    if t["status"] == "ACTIVE"
+                ]
+                st.rerun()
 
 
 # ── Auto refresh ──────────────────────────────────────────

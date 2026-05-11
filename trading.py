@@ -4750,15 +4750,15 @@ with T2:
             key="dur_analyse",
             use_container_width=True
         ):
-            st.session_state["dur_expiry"]  = str(dur_expiry)
-            st.session_state["dur_entry"]   = dur_entry
-            st.session_state["dur_sl"]      = dur_sl
-            st.session_state["dur_target"]  = dur_target
-            st.session_state["dur_type"]    = dur_type
-            st.session_state["dur_active"]  = True
+            st.session_state["_dur_expiry"]  = str(dur_expiry)
+            st.session_state["_dur_entry"]   = dur_entry
+            st.session_state["_dur_sl"]      = dur_sl
+            st.session_state["_dur_target"]  = dur_target
+            st.session_state["_dur_type"]    = dur_type
+            st.session_state["_dur_active"]  = True
 
     # ── Show analysis if active ────────────────────────────
-    if st.session_state.get("dur_active") and sig:
+    if st.session_state.get("_dur_active") and sig:
         from datetime import date as date_type, datetime as dt_type
         import math
 
@@ -4770,10 +4770,10 @@ with T2:
         except:
             expiry_date = now_ist().date()
 
-        s_entry  = st.session_state.get("dur_entry",  0)
-        s_sl     = st.session_state.get("dur_sl",     0)
-        s_target = st.session_state.get("dur_target", 0)
-        s_type   = st.session_state.get("dur_type",   "CE")
+        s_entry  = st.session_state.get("_dur_entry",  0)
+        s_sl     = st.session_state.get("_dur_sl",     0)
+        s_target = st.session_state.get("_dur_target", 0)
+        s_type   = st.session_state.get("_dur_type",   "CE")
         today    = now_ist().date()
 
         days_left  = (expiry_date - today).days
@@ -8786,30 +8786,40 @@ with T6:
     fii_data = get_fii_dii()
 
     if fii_data["ok"]:
-        fd1, fd2, fd3, fd4 = st.columns(4)
         fii_net = fii_data["fii_net"]
         dii_net = fii_data["dii_net"]
 
-        fd1.metric(
-            "FII Buy",
-            f"₹{fii_data['fii_buy']:,.0f}Cr",
+        # Check if data is actually zero (NSE blocked) or real zero
+        _data_valid = (
+            fii_data["fii_buy"] != 0 or
+            fii_data["fii_sell"] != 0
         )
-        fd2.metric(
-            "FII Sell",
-            f"₹{fii_data['fii_sell']:,.0f}Cr",
-        )
-        fd3.metric(
-            "FII Net",
-            f"₹{fii_net:,.0f}Cr",
-            delta=f"{'Buying' if fii_net>0 else 'Selling'}",
-            delta_color="normal" if fii_net > 0 else "inverse"
-        )
-        fd4.metric(
-            "DII Net",
-            f"₹{dii_net:,.0f}Cr",
-            delta=f"{'Buying' if dii_net>0 else 'Selling'}",
-            delta_color="normal" if dii_net > 0 else "inverse"
-        )
+
+        if not _data_valid:
+            st.warning(
+                "⚠️ FII/DII data showing ₹0 — NSE is blocking "
+                "automated requests right now. "
+                "This is common during market hours. "
+                "Check manually at **nseindia.com** → "
+                "Market Data → FII/DII Activity. "
+                "Try clicking Refresh after some time."
+            )
+        else:
+            fd1, fd2, fd3, fd4 = st.columns(4)
+            fd1.metric("FII Buy",  f"₹{fii_data['fii_buy']:,.0f}Cr")
+            fd2.metric("FII Sell", f"₹{fii_data['fii_sell']:,.0f}Cr")
+            fd3.metric(
+                "FII Net",
+                f"₹{fii_net:,.0f}Cr",
+                delta=f"{'Buying' if fii_net>0 else 'Selling'}",
+                delta_color="normal" if fii_net > 0 else "inverse"
+            )
+            fd4.metric(
+                "DII Net",
+                f"₹{dii_net:,.0f}Cr",
+                delta=f"{'Buying' if dii_net>0 else 'Selling'}",
+                delta_color="normal" if dii_net > 0 else "inverse"
+            )
 
         # Signal interpretation
         if fii_net > 1000 and dii_net > 0:
@@ -10598,7 +10608,15 @@ with T10:
             tm_stock = st.text_input(
                 "Stock name", value="NIFTY 50", key="tm_stock"
             )
-            tm_sym  = STOCKS.get(tm_stock, "^NSEI")
+            # Case-insensitive stock lookup
+            tm_sym = None
+            for _k, _v in STOCKS.items():
+                if _k.lower() == tm_stock.lower():
+                    tm_sym = _v
+                    tm_stock = _k  # use correct case
+                    break
+            if not tm_sym:
+                tm_sym = "^NSEI"  # fallback
             tm_type = st.selectbox(
                 "Signal type", ["BUY CE","BUY PE"], key="tm_type"
             )
@@ -10641,6 +10659,13 @@ with T10:
             type="primary", key="tm_add",
             use_container_width=True
         ):
+            # Validate stock name
+            if tm_sym == "^NSEI" and tm_stock != "NIFTY 50":
+                st.warning(
+                    f"Stock '{tm_stock}' not found in database. "
+                    "Check spelling — use exact name like "
+                    "'Titan Company', 'HDFC Bank', 'Reliance'"
+                )
             if tm_entry > 0 and tm_sl > 0 and tm_target > 0:
                 import datetime as _dt2
                 st.session_state["active_trades"].append({
@@ -10682,19 +10707,53 @@ with T10:
     else:
         st.markdown(f"### 📊 Monitoring {len(active)} active trade(s)")
 
+        rc1, rc2 = st.columns([3,1])
+        with rc1:
+            st.caption(
+                "Click Refresh to fetch latest signals. "
+                "Live price updates on every page load."
+            )
+        with rc2:
+            if st.button(
+                "🔄 Refresh Signals",
+                key="tm_refresh_all",
+                type="primary",
+                use_container_width=True
+            ):
+                st.session_state["tm_refresh"] = True
+                for _t in active:
+                    st.session_state.pop(
+                        f"tm_sig_{_t['id']}", None
+                    )
+                st.rerun()
+
+        # Clear refresh flag after use
+        if st.session_state.get("tm_refresh"):
+            st.session_state["tm_refresh"] = False
+
         for idx, trade in enumerate(active):
             st.markdown("---")
 
-            # Fetch live data
-            with st.spinner(f"Analysing {trade['stock']}..."):
-                tm_lp  = live_price(trade["sym"])
-                tm_df  = candles(trade["sym"], trade["tf"])
-                tm_sig = None
+            # Fetch live data — use cached where possible
+            tm_lp  = live_price(trade["sym"])
+            tm_sig = None
+            # Only fetch candles if refresh button was clicked
+            if st.session_state.get("tm_refresh"):
+                tm_df = candles(trade["sym"], trade["tf"])
                 if tm_df is not None and len(tm_df) >= 55:
                     try:
                         tm_sig = compute_all(tm_df, tm_lp)
+                        # Cache the signal
+                        st.session_state[
+                            f"tm_sig_{trade['id']}"
+                        ] = tm_sig
                     except Exception:
                         pass
+            # Use cached signal
+            if tm_sig is None:
+                tm_sig = st.session_state.get(
+                    f"tm_sig_{trade['id']}", None
+                )
 
             cp_now  = tm_lp["p"] if tm_lp["ok"] else trade["entry"]
             is_ce   = trade["type"] == "BUY CE"

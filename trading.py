@@ -6210,7 +6210,7 @@ with T3:
 
         if strong_r:
             st.markdown("---")
-            sh1, sh2 = st.columns([3,1])
+            sh1, sh2, sh3 = st.columns([3,1,1])
             with sh1:
                 st.markdown(f"### 🔥 STRONG SIGNALS — {len(strong_r)} found")
                 st.caption("Confirmed by technical score AND historical consistency.")
@@ -6236,6 +6236,213 @@ with T3:
                             st.success(f"✅ Sent {sent}/{len(strong_r)} signals!")
                         else:
                             st.error("❌ Failed. Check Telegram setup.")
+
+            # Excel Export button
+            with sh3:
+                if st.button(
+                    "📥 Export Excel",
+                    key="scan_export_excel",
+                    use_container_width=True,
+                    help="Export all signals to Excel for paper trading"
+                ):
+                    import io
+                    from openpyxl import Workbook
+                    from openpyxl.styles import (
+                        PatternFill, Font, Alignment, Border, Side
+                    )
+                    from datetime import datetime as _xdt
+
+                    wb  = Workbook()
+                    ws  = wb.active
+                    ws.title = "Scanner Signals"
+
+                    # ── Styles ─────────────────────────────
+                    hdr_fill = PatternFill(
+                        "solid", fgColor="1e3a5f"
+                    )
+                    hdr_font = Font(
+                        color="FFFFFF", bold=True, size=11
+                    )
+                    green_fill = PatternFill(
+                        "solid", fgColor="d1fae5"
+                    )
+                    red_fill   = PatternFill(
+                        "solid", fgColor="fee2e2"
+                    )
+                    purple_fill= PatternFill(
+                        "solid", fgColor="ede9fe"
+                    )
+                    center  = Alignment(horizontal="center")
+                    thin    = Border(
+                        left=Side(style="thin"),
+                        right=Side(style="thin"),
+                        top=Side(style="thin"),
+                        bottom=Side(style="thin")
+                    )
+
+                    # ── Title row ──────────────────────────
+                    ws.merge_cells("A1:P1")
+                    ws["A1"] = (
+                        f"Trading Terminal — Scanner Signals | "
+                        f"{_xdt.now().strftime('%d %b %Y %H:%M IST')}"
+                    )
+                    ws["A1"].font      = Font(bold=True, size=13)
+                    ws["A1"].fill      = PatternFill("solid", fgColor="1e3a5f")
+                    ws["A1"].font      = Font(color="FFFFFF", bold=True, size=13)
+                    ws["A1"].alignment = center
+
+                    # ── Headers ────────────────────────────
+                    headers = [
+                        "Stock","Signal","Score","Combined",
+                        "R:R","Price","Change%","Entry","Stop Loss",
+                        "Target 1","Target 2","ATM Strike",
+                        "ITM Strike","OTM Strike","RSI","CPR",
+                        "Confidence","Diamond","Sector"
+                    ]
+                    for ci, hdr in enumerate(headers, 1):
+                        cell = ws.cell(row=2, column=ci, value=hdr)
+                        cell.fill      = hdr_fill
+                        cell.font      = hdr_font
+                        cell.alignment = center
+                        cell.border    = thin
+                        ws.column_dimensions[
+                            cell.column_letter
+                        ].width = max(12, len(hdr)+2)
+
+                    # ── All signals (Diamond + Strong) ─────
+                    all_signals = (
+                        [dict(r, _is_d=True)
+                         for r in diamond_r] +
+                        [dict(r, _is_d=False)
+                         for r in strong_r]
+                    )
+
+                    for ri, r in enumerate(all_signals, 3):
+                        is_d   = r.get("_is_d", False)
+                        is_ce  = r["Direction"] == "UPTREND"
+                        row_fill = (
+                            purple_fill if is_d
+                            else green_fill if is_ce
+                            else red_fill
+                        )
+                        row_data = [
+                            r["Stock"],
+                            r["Action"],
+                            r["Score"],
+                            r["Combined"],
+                            r["RR"],
+                            r["Price"],
+                            f"{r['Change%']:+.2f}%",
+                            r["Entry"],
+                            r["SL"],
+                            r["T1"],
+                            r["T2"],
+                            r.get("ATM", ""),
+                            r.get("ITM", ""),
+                            r.get("OTM", ""),
+                            round(r.get("RSI", 0), 1),
+                            r.get("CPR_Pos", ""),
+                            r.get("Confidence", ""),
+                            "💎 YES" if is_d else "No",
+                            r.get("Sector", ""),
+                        ]
+                        for ci, val in enumerate(row_data, 1):
+                            cell = ws.cell(row=ri, column=ci, value=val)
+                            cell.fill      = row_fill
+                            cell.alignment = center
+                            cell.border    = thin
+
+                    # ── Paper Trading Sheet ────────────────
+                    ws2 = wb.create_sheet("Paper Trading")
+                    pt_headers = [
+                        "Date","Stock","Signal","Entry Price",
+                        "Lots","Option Strike","Premium Paid",
+                        "Stop Loss","Target 1","Target 2",
+                        "Exit Price","P&L Points","P&L ₹",
+                        "Result","Notes"
+                    ]
+                    pt_fill = PatternFill("solid", fgColor="0f766e")
+                    for ci, hdr in enumerate(pt_headers, 1):
+                        cell = ws2.cell(row=1, column=ci, value=hdr)
+                        cell.fill      = pt_fill
+                        cell.font      = Font(
+                            color="FFFFFF", bold=True
+                        )
+                        cell.alignment = center
+                        cell.border    = thin
+                        ws2.column_dimensions[
+                            cell.column_letter
+                        ].width = max(14, len(hdr)+2)
+
+                    # Pre-fill paper trading rows from signals
+                    from datetime import date as _date
+                    for ri, r in enumerate(all_signals, 2):
+                        pt_data = [
+                            _date.today().strftime("%d %b %Y"),
+                            r["Stock"],
+                            r["Action"],
+                            r["Entry"],
+                            1,  # default 1 lot
+                            r.get("ATM", ""),
+                            "",  # premium paid (fill manually)
+                            r["SL"],
+                            r["T1"],
+                            r["T2"],
+                            "",  # exit price
+                            "",  # P&L points
+                            "",  # P&L ₹
+                            "",  # result
+                            "",  # notes
+                        ]
+                        row_fill2 = (
+                            green_fill
+                            if r["Direction"] == "UPTREND"
+                            else red_fill
+                        )
+                        for ci, val in enumerate(pt_data, 1):
+                            cell = ws2.cell(
+                                row=ri, column=ci, value=val
+                            )
+                            cell.fill      = row_fill2
+                            cell.alignment = center
+                            cell.border    = thin
+
+                    # ── Market Context Sheet ───────────────
+                    ws3 = wb.create_sheet("Market Context")
+                    ws3["A1"] = "Market Context"
+                    ws3["A1"].font = Font(bold=True, size=12)
+                    _ctx_data = [
+                        ["Date", _xdt.now().strftime("%d %b %Y")],
+                        ["Time", _xdt.now().strftime("%H:%M IST")],
+                        ["Scan Group", grp_used],
+                        ["Timeframe", tf_used],
+                        ["Total Signals", len(all_signals)],
+                        ["Diamond Signals", len(diamond_r)],
+                        ["Strong Signals", len(strong_r)],
+                    ]
+                    for ri, (k, v) in enumerate(_ctx_data, 2):
+                        ws3.cell(row=ri, column=1, value=k).font = Font(bold=True)
+                        ws3.cell(row=ri, column=2, value=str(v))
+
+                    # ── Save and download ──────────────────
+                    _buf = io.BytesIO()
+                    wb.save(_buf)
+                    _buf.seek(0)
+                    _fname = (
+                        f"signals_{_xdt.now().strftime('%d%b%Y_%H%M')}.xlsx"
+                    )
+                    st.download_button(
+                        label="📥 Download Excel File",
+                        data=_buf.getvalue(),
+                        file_name=_fname,
+                        mime="application/vnd.openxmlformats-"
+                             "officedocument.spreadsheetml.sheet",
+                        key="scan_dl_excel"
+                    )
+                    st.success(
+                        f"✅ Excel ready — {len(all_signals)} signals "
+                        f"exported with paper trading sheet!"
+                    )
 
             for idx_r, r in enumerate(strong_r):
                 dir_col  = "#16a34a" if r["Direction"]=="UPTREND" else "#dc2626"

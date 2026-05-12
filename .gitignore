@@ -26,3 +26,6 @@ Thumbs.db
 
 # Logs
 *.log
+active_trades.json
+trade_journal.json
+.trading_creds.json

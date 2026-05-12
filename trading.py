@@ -1813,6 +1813,52 @@ def live_price(sym: str) -> dict:
                     "source":"yahoo"}
     return _yahoo_price(sym)
 
+# ── Persistent Trade Storage ──────────────────────────────
+import json as _json
+import os as _os
+
+_TRADES_FILE  = "active_trades.json"
+_JOURNAL_FILE = "trade_journal.json"
+
+def save_trades(trades: list):
+    """Save trades to JSON file — persists across page refresh."""
+    try:
+        with open(_TRADES_FILE, "w") as _f:
+            _json.dump(trades, _f, indent=2, default=str)
+    except Exception:
+        pass
+
+def load_trades() -> list:
+    """Load trades from JSON file on startup."""
+    try:
+        if _os.path.exists(_TRADES_FILE):
+            with open(_TRADES_FILE, "r") as _f:
+                data = _json.load(_f)
+                return data if isinstance(data, list) else []
+    except Exception:
+        pass
+    return []
+
+def save_journal(journal: list):
+    """Save trade journal to JSON file."""
+    try:
+        with open(_JOURNAL_FILE, "w") as _f:
+            _json.dump(journal, _f, indent=2, default=str)
+    except Exception:
+        pass
+
+def load_journal() -> list:
+    """Load trade journal from JSON file."""
+    try:
+        if _os.path.exists(_JOURNAL_FILE):
+            with open(_JOURNAL_FILE, "r") as _f:
+                data = _json.load(_f)
+                return data if isinstance(data, list) else []
+    except Exception:
+        pass
+    return []
+
+
 def get_kite_instruments(_token: str = "") -> dict:
     """
     Cache NSE instruments in st.session_state.
@@ -10595,8 +10641,11 @@ with T10:
     )
 
     # ── Initialize trade store ─────────────────────────────
+    # Load from file if session_state is empty (page refresh etc)
     if "active_trades" not in st.session_state:
-        st.session_state["active_trades"] = []
+        st.session_state["active_trades"] = load_trades()
+    if "trade_journal" not in st.session_state:
+        st.session_state["trade_journal"] = load_journal()
 
     # ── Add new trade ──────────────────────────────────────
     with st.expander(
@@ -10685,6 +10734,8 @@ with T10:
                     "status":       "ACTIVE",
                     "last_action":  "Trade added",
                 })
+                # Save to file immediately
+                save_trades(st.session_state["active_trades"])
                 st.success(
                     f"✅ {tm_stock} {tm_type} added to Trade Manager!"
                 )
@@ -11193,6 +11244,7 @@ with T10:
                     use_container_width=True
                 ):
                     trade["status"] = "CLOSED — MANUAL"
+                    save_trades(st.session_state["active_trades"])
                     st.rerun()
             with ab2:
                 if st.button(
@@ -11204,6 +11256,7 @@ with T10:
                         1, trade["lots_rem"] // 2
                     )
                     trade["last_action"] = "Reduced 50%"
+                    save_trades(st.session_state["active_trades"])
                     st.success(
                         f"Reduced to {trade['lots_rem']} lots"
                     )
@@ -11222,6 +11275,7 @@ with T10:
                         else trade["sl"]
                     )
                     trade["sl"] = round(new_sl, 2)
+                    save_trades(st.session_state["active_trades"])
                     st.success(f"SL trailed to ₹{trade['sl']:,.2f}")
             with ab4:
                 if tg_configured():
@@ -11306,6 +11360,7 @@ with T10:
                 "vix":     j_vix,
                 "emotion": j_emotion,
             })
+            save_journal(st.session_state["trade_journal"])
             st.success("Trade recorded ✅")
 
     # Analytics display
@@ -11414,6 +11469,7 @@ with T10:
                     t for t in trades
                     if t["status"] == "ACTIVE"
                 ]
+                save_trades(st.session_state["active_trades"])
                 st.rerun()
 
 

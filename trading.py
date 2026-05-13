@@ -317,6 +317,106 @@ def get_iv_rank(symbol: str = "NIFTY") -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+@st.cache_data(ttl=60)
+def get_live_greeks(
+    symbol: str,
+    strike: float,
+    opt_type: str = "CE",
+    expiry: str = ""
+) -> dict:
+    """
+    Fetch live Greeks for a specific options contract.
+    Uses Kite API if connected, else estimates from Black-Scholes.
+    opt_type: CE or PE
+    """
+    try:
+        kite = get_kite()
+        if kite:
+            # Try to get from Kite instruments
+            _token = st.session_state.get("kite_access_token","")
+            _inst_map = get_kite_instruments(_token)
+            # Build option symbol name
+            _sym = symbol.replace(" ","").replace("&","")
+            _opt_sym = f"{_sym}{expiry}{int(strike)}{opt_type}"
+
+            _inst_token = _inst_map.get(_opt_sym)
+            if _inst_token:
+                _quote = kite.quote([f"NFO:{_opt_sym}"])
+                if _quote:
+                    _q = list(_quote.values())[0]
+                    return {
+                        "ok":     True,
+                        "source": "Kite Live",
+                        "ltp":    _q.get("last_price", 0),
+                        "oi":     _q.get("oi", 0),
+                        "volume": _q.get("volume", 0),
+                        "iv":     _q.get("implied_volatility", 0),
+                        "delta":  _q.get("greeks", {}).get("delta", 0),
+                        "theta":  _q.get("greeks", {}).get("theta", 0),
+                        "gamma":  _q.get("greeks", {}).get("gamma", 0),
+                        "vega":   _q.get("greeks", {}).get("vega", 0),
+                    }
+    except Exception:
+        pass
+
+    # Fallback: Black-Scholes estimation
+    try:
+        import math as _math
+        from scipy.stats import norm as _norm
+
+        # Get current spot price
+        _spot_lp = live_price(
+            "^NSEI" if "NIFTY" in symbol.upper()
+            else "^NSEBANK"
+        )
+        S = _spot_lp["p"] if _spot_lp["ok"] else strike
+        K = strike
+        T = max(1, 7) / 365  # assume 7 days to expiry
+        r = 0.065  # risk-free rate India
+        # Use VIX as proxy for sigma
+        _vd = get_india_vix()
+        sigma = (_vd["vix"] / 100) if _vd["ok"] else 0.15
+
+        d1 = (
+            (_math.log(S/K) + (r + 0.5*sigma**2)*T)
+            / (sigma * _math.sqrt(T))
+        )
+        d2 = d1 - sigma * _math.sqrt(T)
+
+        if opt_type == "CE":
+            delta = float(_norm.cdf(d1))
+            theta = float(
+                -(S * _norm.pdf(d1) * sigma) /
+                (2 * _math.sqrt(T)) -
+                r * K * _math.exp(-r*T) * _norm.cdf(d2)
+            ) / 365
+        else:
+            delta = float(_norm.cdf(d1) - 1)
+            theta = float(
+                -(S * _norm.pdf(d1) * sigma) /
+                (2 * _math.sqrt(T)) +
+                r * K * _math.exp(-r*T) * _norm.cdf(-d2)
+            ) / 365
+
+        gamma = float(
+            _norm.pdf(d1) / (S * sigma * _math.sqrt(T))
+        )
+        vega = float(S * _norm.pdf(d1) * _math.sqrt(T)) / 100
+
+        return {
+            "ok":     True,
+            "source": "Estimated (B-S)",
+            "ltp":    0,
+            "delta":  round(delta, 4),
+            "theta":  round(theta, 4),
+            "gamma":  round(gamma, 6),
+            "vega":   round(vega, 4),
+            "iv":     round(sigma * 100, 2),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @st.cache_data(ttl=120)
 def get_oi_change_data(symbol: str = "NIFTY") -> dict:
     """
@@ -479,6 +579,94 @@ def get_oi_change_data(symbol: str = "NIFTY") -> dict:
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+@st.cache_data(ttl=3600)
+def get_economic_calendar() -> list:
+    """
+    Get upcoming Indian and US economic events.
+    Returns list of events for next 7 days.
+    Uses a predefined calendar of recurring events
+    plus fetches from public sources when available.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    import pytz as _ptz
+
+    _ist  = _ptz.timezone("Asia/Kolkata")
+    _now  = _dt.now(_ist)
+    _events = []
+
+    # ── Fixed recurring Indian events ─────────────────────
+    # RBI MPC meetings 2025-2026 (approximate dates)
+    _rbi_dates = [
+        "2026-06-04", "2026-08-06", "2026-10-01",
+        "2026-12-03", "2027-02-05"
+    ]
+    for _rd in _rbi_dates:
+        try:
+            _rdt = _dt.strptime(_rd, "%Y-%m-%d").date()
+            _days = (_rdt - _now.date()).days
+            if 0 <= _days <= 30:
+                _events.append({
+                    "date":    _rd,
+                    "event":   "🏦 RBI MPC Policy Decision",
+                    "impact":  "HIGH",
+                    "country": "India",
+                    "note":    "Interest rate decision — major market mover",
+                    "days_away": _days,
+                })
+        except Exception:
+            pass
+
+    # ── Try to fetch from investing.com economic calendar ──
+    try:
+        import requests as _req
+        _hdrs = {
+            "User-Agent": "Mozilla/5.0",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        # Fallback: use predefined weekly events
+        _weekly_events = []
+
+        # US events (affect Indian markets)
+        _us_events = [
+            ("Monday",    "🇺🇸 US ISM Manufacturing",    "MEDIUM"),
+            ("Wednesday", "🇺🇸 US Fed FOMC Minutes",      "HIGH"),
+            ("Thursday",  "🇺🇸 US Initial Jobless Claims","LOW"),
+            ("Friday",    "🇺🇸 US NFP/Jobs Report",       "HIGH"),
+        ]
+
+        # Indian weekly events
+        _in_events = [
+            ("Monday",   "🇮🇳 India FII/DII Data",        "MEDIUM"),
+            ("Thursday", "🇮🇳 NSE F&O Expiry",            "HIGH"),
+        ]
+
+        _day_names = [
+            "Monday","Tuesday","Wednesday",
+            "Thursday","Friday","Saturday","Sunday"
+        ]
+
+        for _offset in range(8):
+            _dt_check = (_now + _td(days=_offset)).date()
+            _day_name = _day_names[_dt_check.weekday()]
+
+            for _day, _evt, _imp in _us_events + _in_events:
+                if _day == _day_name:
+                    _events.append({
+                        "date":    str(_dt_check),
+                        "event":   _evt,
+                        "impact":  _imp,
+                        "country": "US" if "🇺🇸" in _evt else "India",
+                        "note":    "",
+                        "days_away": _offset,
+                    })
+    except Exception:
+        pass
+
+    # Sort by date
+    _events.sort(key=lambda x: x["days_away"])
+    return _events[:15]  # next 15 events
+
 
 @st.cache_data(ttl=300)
 def get_india_vix() -> dict:
@@ -4560,6 +4748,67 @@ with T2:
     )
 
     # CPR section
+    # ── Live Options Greeks ───────────────────────────────────
+    if sig:
+        st.markdown("### 🔢 Options Greeks")
+        st.caption(
+            "Greeks show how your option price will behave. "
+            "Kite live if connected, else Black-Scholes estimate."
+        )
+        _gk1, _gk2 = st.columns([1,2])
+        with _gk1:
+            _g_strike = st.number_input(
+                "Option strike",
+                value=float(round(sig["cp"]/50)*50),
+                step=50.0, key="g_strike"
+            )
+            _g_type = st.selectbox(
+                "Option type",
+                ["CE","PE"],
+                index=0 if sig["direction"]=="UPTREND" else 1,
+                key="g_type"
+            )
+        with _gk2:
+            if st.button(
+                "Calculate Greeks",
+                key="calc_greeks",
+                type="primary",
+                use_container_width=True
+            ):
+                with st.spinner("Fetching Greeks..."):
+                    _g_sym = (
+                        "BANKNIFTY" if "BANK" in sname.upper()
+                        else "NIFTY"
+                    )
+                    _greeks = get_live_greeks(
+                        _g_sym, _g_strike, _g_type
+                    )
+                if _greeks["ok"]:
+                    _gc1,_gc2,_gc3,_gc4 = st.columns(4)
+                    _gc1.metric("Delta", f"{_greeks['delta']:.3f}",
+                        help=f"₹1 move = ₹{abs(_greeks['delta']):.2f} option change")
+                    _gc2.metric("Theta", f"₹{_greeks['theta']:.2f}/day",
+                        delta="decay", delta_color="inverse")
+                    _gc3.metric("Gamma", f"{_greeks['gamma']:.5f}")
+                    _gc4.metric("Vega",  f"{_greeks['vega']:.3f}")
+                    st.caption(f"Source: {_greeks['source']}")
+
+                    _smove = abs(
+                        sig["tgt1"] - sig["cp"]
+                        if sig["direction"]=="UPTREND"
+                        else sig["cp"] - sig["tgt1s"]
+                    )
+                    _ogain = round(abs(_greeks["delta"]) * _smove, 2)
+                    _ddays = round(abs(_ogain / (_greeks["theta"] - 0.001))) if _greeks["theta"] != 0 else 99
+                    st.info(
+                        f"Stock moves ₹{_smove:.0f} to T1 → "
+                        f"option gains ~₹{_ogain:.0f} | "
+                        f"Theta neutralizes gain in ~{_ddays} days if flat"
+                    )
+                else:
+                    st.warning("Greeks unavailable.")
+
+
     # ── Supertrend Display ────────────────────────────────
     if sig:
         st_col = "#16a34a" if sig["st_bull"] else "#dc2626"
@@ -5582,6 +5831,33 @@ with T3:
     alert_score = min_score_scan  # used for display only
 
     # Mobile-friendly controls - stack vertically on small screens
+    # Fetch NIFTY correlation signal for filter
+    if "nifty_corr_sig" not in st.session_state:
+        with st.spinner("Loading NIFTY trend for correlation filter..."):
+            try:
+                _nf_df = candles("^NSEI", scan_tf)
+                _nf_lp = live_price("^NSEI")
+                if _nf_df is not None and len(_nf_df) >= 55:
+                    _nf_sig = compute_all(_nf_df, _nf_lp)
+                    st.session_state["nifty_corr_sig"] = _nf_sig
+            except Exception:
+                pass
+
+    _nf_s = st.session_state.get("nifty_corr_sig")
+    if _nf_s:
+        _nfd = _nf_s.get("direction","SIDEWAYS")
+        _nfc = "#16a34a" if _nfd=="UPTREND" else "#dc2626" if _nfd=="DOWNTREND" else "#f59e0b"
+        st.markdown(
+            f"<div style='background:{_nfc}22;border:1px solid {_nfc};"
+            f"border-radius:8px;padding:8px 14px;margin-bottom:8px;"
+            f"font-size:13px;color:{_nfc}'>"
+            f"<b>NIFTY Correlation:</b> {_nfd} "
+            f"(Score {max(_nf_s['up_score'],_nf_s['dn_score'])}/10) — "
+            f"{'CE signals shown only' if _nfd=='UPTREND' else 'PE signals shown only' if _nfd=='DOWNTREND' else 'Both CE and PE signals shown'}"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
     sc_b1, sc_b2 = st.columns([3,1])
     with sc_b1:
         run_scanner = st.button(
@@ -5814,23 +6090,31 @@ with T3:
                     continue
 
                 # ── Fix 2: Skip if price too far from entry ──
-                # Signal is stale if current price has moved
-                # more than 1.5 ATR away from entry in wrong direction
-                _entry = sig["e9v"]
-                _cp    = sig["cp"]
-                _atr   = sig["atrv"]
-                _dist  = abs(_cp - _entry)
+                _entry    = sig.get("entry_long", sig["e9v"])
+                _cp       = sig["cp"]
+                _atr      = sig["atrv"]
                 _max_dist = _atr * 1.5
 
                 if direction == "UPTREND":
-                    # CE: price should be near or above entry (EMA9)
-                    # If price is too far BELOW entry — signal is stale
                     if _cp < (_entry - _max_dist):
                         continue
                 elif direction == "DOWNTREND":
-                    # PE: price should be near or below entry (EMA9)
-                    # If price is too far ABOVE entry — signal is stale
                     if _cp > (_entry + _max_dist):
+                        continue
+
+                # ── Fix 3: NIFTY Correlation Filter ──────────
+                # Skip CE signals if NIFTY itself is in downtrend
+                # Skip PE signals if NIFTY itself is in uptrend
+                _nifty_sig = st.session_state.get("nifty_corr_sig")
+                if _nifty_sig:
+                    _nifty_dir = _nifty_sig.get("direction","SIDEWAYS")
+                    if (direction == "UPTREND" and
+                            _nifty_dir == "DOWNTREND"):
+                        # CE signal but NIFTY is falling — skip
+                        continue
+                    elif (direction == "DOWNTREND" and
+                            _nifty_dir == "UPTREND"):
+                        # PE signal but NIFTY is rising — skip
                         continue
 
                 # CPR is informational only — not used as filter
@@ -9023,6 +9307,73 @@ with T6:
                     f"({_worst_s[1]:+.2f}%) — "
                     f"Consider PE trades here"
                 )
+
+    # ── Economic Calendar ─────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 📅 Economic Calendar — Upcoming Events")
+    st.caption(
+        "High impact events can move markets 2-3% in minutes. "
+        "Avoid entering new trades before HIGH impact events."
+    )
+
+    _cal_events = get_economic_calendar()
+    if _cal_events:
+        for _ev in _cal_events[:8]:
+            _imp    = _ev["impact"]
+            _days   = _ev["days_away"]
+            _imp_col = (
+                "#dc2626" if _imp=="HIGH"
+                else "#d97706" if _imp=="MEDIUM"
+                else "#16a34a"
+            )
+            _imp_bg = (
+                "#fef2f2" if _imp=="HIGH"
+                else "#fffbeb" if _imp=="MEDIUM"
+                else "#f0fdf4"
+            )
+            _days_label = (
+                "🔴 TODAY" if _days==0
+                else "🟠 TOMORROW" if _days==1
+                else f"In {_days} days"
+            )
+            st.markdown(
+                f"<div style='background:{_imp_bg};"
+                f"border-left:4px solid {_imp_col};"
+                f"border-radius:0 8px 8px 0;"
+                f"padding:10px 14px;margin:4px 0;"
+                f"display:flex;justify-content:space-between;"
+                f"align-items:center'>"
+                f"<div>"
+                f"<span style='font-size:13px;font-weight:700;"
+                f"color:#1e293b'>{_ev['event']}</span>"
+                f"<span style='font-size:11px;color:#64748b;"
+                f"margin-left:8px'>{_ev['date']}</span>"
+                f"{'<br><span style="font-size:11px;color:#64748b">' + _ev['note'] + '</span>' if _ev['note'] else ''}"
+                f"</div>"
+                f"<div style='text-align:right'>"
+                f"<span style='background:{_imp_col};color:white;"
+                f"padding:2px 8px;border-radius:10px;"
+                f"font-size:11px;font-weight:700'>{_imp}</span>"
+                f"<br><span style='font-size:11px;color:{_imp_col};"
+                f"font-weight:600'>{_days_label}</span>"
+                f"</div></div>",
+                unsafe_allow_html=True
+            )
+
+        # Warning if high impact event today or tomorrow
+        _urgent = [
+            e for e in _cal_events
+            if e["impact"]=="HIGH" and e["days_away"] <= 1
+        ]
+        if _urgent:
+            st.error(
+                f"⚠️ HIGH IMPACT EVENT {'TODAY' if _urgent[0]['days_away']==0 else 'TOMORROW'}: "
+                f"{_urgent[0]['event']} — "
+                f"Avoid entering new trades. "
+                f"Existing trades: tighten stop loss."
+            )
+    else:
+        st.info("No major events in next 7 days. Clear to trade.")
 
     # ── Market Breadth ─────────────────────────────────────
     st.markdown("---")

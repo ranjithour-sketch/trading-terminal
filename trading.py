@@ -229,6 +229,8 @@ TAB_ROUTES = {
     "backtest":  7,
     "hub":       8,
     "manager":   9,
+    "paper":     10,
+    "orders":    11,
 }
 TAB_NAMES = [
     "📋 Watchlist",
@@ -241,8 +243,10 @@ TAB_NAMES = [
     "🧪 Backtest",
     "🎯 Signal Hub",
     "🛡️ Trade Manager",
+    "📝 Paper Trading",
+    "⚡ Auto Orders",
 ]
-TAB_ICONS = ["📋","🎯","🔍","🤖","🏦","📊","🔗","🧪","🎯","🛡️"]
+TAB_ICONS = ["📋","🎯","🔍","🤖","🏦","📊","🔗","🧪","🎯","🛡️","📝","⚡"]
 TAB_KEYS  = list(TAB_ROUTES.keys())
 
 # Read current tab from URL
@@ -2008,6 +2012,26 @@ import os as _os
 _TRADES_FILE  = "active_trades.json"
 _JOURNAL_FILE = "trade_journal.json"
 
+def save_paper_trades(trades: list):
+    """Save paper trades to JSON file."""
+    try:
+        with open("paper_trades.json", "w") as _f:
+            _json.dump(trades, _f, indent=2, default=str)
+    except Exception:
+        pass
+
+def load_paper_trades() -> list:
+    """Load paper trades from JSON file."""
+    try:
+        if _os.path.exists("paper_trades.json"):
+            with open("paper_trades.json", "r") as _f:
+                data = _json.load(_f)
+                return data if isinstance(data, list) else []
+    except Exception:
+        pass
+    return []
+
+
 def save_trades(trades: list):
     """Save trades to JSON file — persists across page refresh."""
     try:
@@ -3159,6 +3183,8 @@ with st.expander("Open any tab in a separate browser window"):
         ("🧪 Backtest",     "backtest",  "#1d4ed8"),
         ("🎯 Signal Hub",   "hub",       "#0f766e"),
         ("🛡️ Trade Manager","manager",   "#1e3a5f"),
+        ("📝 Paper Trading", "paper",     "#0f766e"),
+        ("⚡ Auto Orders",   "orders",    "#dc2626"),
     ]
     for idx, (lname, lkey, lcolor) in enumerate(link_data):
         col_idx = idx % 5
@@ -3452,7 +3478,7 @@ stick = st.session_state["st"]
 # ══════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════
-T1,T2,T3,T4,T5,T6,T7,T8,T9,T10 = st.tabs(TAB_NAMES)
+T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,T12 = st.tabs(TAB_NAMES)
 
 # ── Reusable inline stock search widget ──────────────────
 def inline_stock_search(tab_key: str):
@@ -6350,6 +6376,132 @@ with T3:
         )
         strong_r = [r for r in results_sorted if r["Score"] >= 8]
         good_r   = [r for r in results_sorted if 6 <= r["Score"] < 8]
+
+        # ── Export Excel button — shown right after scan ───
+        if results_sorted:
+            _xb1, _xb2 = st.columns([3,1])
+            with _xb1:
+                st.success(
+                    f"✅ {len(results_sorted)} signals found — "
+                    f"click Export to download for paper trading"
+                )
+            with _xb2:
+                _do_export = st.button(
+                    "📥 Export Excel",
+                    key="scan_export_top",
+                    type="primary",
+                    use_container_width=True
+                )
+
+            if _do_export:
+                import io
+                from openpyxl import Workbook
+                from openpyxl.styles import (
+                    PatternFill, Font, Alignment, Border, Side
+                )
+                from datetime import datetime as _xdt
+                from datetime import date as _xdate
+
+                wb  = Workbook()
+                ws  = wb.active
+                ws.title = "Scanner Signals"
+
+                _hf    = PatternFill("solid", fgColor="1e3a5f")
+                _hfont = Font(color="FFFFFF", bold=True, size=11)
+                _gf    = PatternFill("solid", fgColor="d1fae5")
+                _rf    = PatternFill("solid", fgColor="fee2e2")
+                _pf    = PatternFill("solid", fgColor="ede9fe")
+                _ca    = Alignment(horizontal="center")
+                _bd    = Border(
+                    left=Side(style="thin"),
+                    right=Side(style="thin"),
+                    top=Side(style="thin"),
+                    bottom=Side(style="thin")
+                )
+
+                ws.merge_cells("A1:R1")
+                ws["A1"] = (
+                    f"Trading Terminal | "
+                    f"{_xdt.now().strftime('%d %b %Y %H:%M IST')}"
+                )
+                ws["A1"].fill = PatternFill("solid", fgColor="1e3a5f")
+                ws["A1"].font = Font(color="FFFFFF", bold=True, size=13)
+                ws["A1"].alignment = _ca
+
+                _hdrs = [
+                    "Stock","Signal","Score","Combined","R:R",
+                    "Price","Change%","Entry","Stop Loss",
+                    "Target 1","Target 2","ATM","ITM","OTM",
+                    "RSI","CPR","Confidence","Diamond"
+                ]
+                for _ci,_h in enumerate(_hdrs,1):
+                    _c = ws.cell(row=2, column=_ci, value=_h)
+                    _c.fill=_hf; _c.font=_hfont
+                    _c.alignment=_ca; _c.border=_bd
+                    ws.column_dimensions[_c.column_letter].width = max(12,len(_h)+2)
+
+                _diamond_r = [r for r in results_sorted if r.get("Is_Diamond",False)]
+                _all_sigs  = (
+                    [dict(r,_d=True) for r in _diamond_r] +
+                    [dict(r,_d=False) for r in results_sorted if not r.get("Is_Diamond",False)]
+                )
+
+                for _ri,_r in enumerate(_all_sigs,3):
+                    _is_d  = _r.get("_d",False)
+                    _is_ce = _r["Direction"]=="UPTREND"
+                    _rfl   = _pf if _is_d else _gf if _is_ce else _rf
+                    _row   = [
+                        _r["Stock"],_r["Action"],_r["Score"],_r["Combined"],
+                        _r["RR"],_r["Price"],f"{_r.get('Change%',0):+.2f}%",
+                        _r["Entry"],_r["SL"],_r["T1"],_r["T2"],
+                        _r.get("ATM",""),_r.get("ITM",""),_r.get("OTM",""),
+                        round(_r.get("RSI",0),1),_r.get("CPR_Pos",""),
+                        _r.get("Confidence",""),"💎 YES" if _is_d else "No"
+                    ]
+                    for _ci,_v in enumerate(_row,1):
+                        _c=ws.cell(row=_ri,column=_ci,value=_v)
+                        _c.fill=_rfl; _c.alignment=_ca; _c.border=_bd
+
+                # Paper Trading sheet
+                ws2 = wb.create_sheet("Paper Trading")
+                _pt_hdrs = [
+                    "Date","Stock","Signal","Entry Price","Lots",
+                    "ATM Strike","Premium Paid","Stop Loss",
+                    "Target 1","Target 2","Exit Price",
+                    "P&L Points","P&L ₹","Result","Notes"
+                ]
+                _ptf = PatternFill("solid", fgColor="0f766e")
+                for _ci,_h in enumerate(_pt_hdrs,1):
+                    _c=ws2.cell(row=1,column=_ci,value=_h)
+                    _c.fill=_ptf
+                    _c.font=Font(color="FFFFFF",bold=True)
+                    _c.alignment=_ca; _c.border=_bd
+                    ws2.column_dimensions[_c.column_letter].width=max(14,len(_h)+2)
+
+                for _ri,_r in enumerate(_all_sigs,2):
+                    _is_ce=_r["Direction"]=="UPTREND"
+                    _ptrow=[
+                        _xdate.today().strftime("%d %b %Y"),
+                        _r["Stock"],_r["Action"],_r["Entry"],
+                        1,_r.get("ATM",""),"",_r["SL"],
+                        _r["T1"],_r["T2"],"","","","",""
+                    ]
+                    _prf=_gf if _is_ce else _rf
+                    for _ci,_v in enumerate(_ptrow,1):
+                        _c=ws2.cell(row=_ri,column=_ci,value=_v)
+                        _c.fill=_prf; _c.alignment=_ca; _c.border=_bd
+
+                _buf=io.BytesIO()
+                wb.save(_buf); _buf.seek(0)
+                _fname=f"signals_{_xdt.now().strftime('%d%b%Y_%H%M')}.xlsx"
+                st.download_button(
+                    label="📥 Download Excel Now",
+                    data=_buf.getvalue(),
+                    file_name=_fname,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="scan_dl_top"
+                )
+                st.success(f"✅ {len(_all_sigs)} signals exported!")
         ce_list  = [r for r in results_sorted if r["Direction"]=="UPTREND"]
         pe_list  = [r for r in results_sorted if r["Direction"]=="DOWNTREND"]
 
@@ -11136,21 +11288,37 @@ with T10:
         for idx, trade in enumerate(active):
             st.markdown("---")
 
-            # Fetch live data — use cached where possible
-            tm_lp  = live_price(trade["sym"])
+            # ── Fast loading — cache everything ────────
+            # Live price: cached 30 seconds
+            _tm_lp_key = f"tm_lp_{trade['sym']}"
+            _tm_lp_ts  = f"tm_lp_ts_{trade['sym']}"
+            import time as _tm_time
+            _now_ts = _tm_time.time()
+            _last_ts = st.session_state.get(_tm_lp_ts, 0)
+
+            if _now_ts - _last_ts > 30:  # refresh every 30 sec
+                tm_lp = live_price(trade["sym"])
+                st.session_state[_tm_lp_key] = tm_lp
+                st.session_state[_tm_lp_ts]  = _now_ts
+            else:
+                tm_lp = st.session_state.get(
+                    _tm_lp_key,
+                    {"ok": False, "p": trade["entry"]}
+                )
+
+            # Signal: only fetch on Refresh button click
             tm_sig = None
-            # Only fetch candles if refresh button was clicked
             if st.session_state.get("tm_refresh"):
-                tm_df = candles(trade["sym"], trade["tf"])
-                if tm_df is not None and len(tm_df) >= 55:
-                    try:
+                try:
+                    tm_df = candles(trade["sym"], trade["tf"])
+                    if tm_df is not None and len(tm_df) >= 55:
                         tm_sig = compute_all(tm_df, tm_lp)
-                        # Cache the signal
                         st.session_state[
                             f"tm_sig_{trade['id']}"
                         ] = tm_sig
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
+
             # Use cached signal
             if tm_sig is None:
                 tm_sig = st.session_state.get(
@@ -11822,6 +11990,764 @@ with T10:
                 ]
                 save_trades(st.session_state["active_trades"])
                 st.rerun()
+
+
+# ╔══════════════════════════════════════════════════════╗
+# ║  TAB 11 — PAPER TRADING                             ║
+# ╚══════════════════════════════════════════════════════╝
+with T11:
+    st.markdown("### 📝 Paper Trading — Virtual Trading Simulator")
+    st.caption(
+        "Practice trading with virtual money before using real capital. "
+        "All signals come from your live terminal. "
+        "Track performance, learn from mistakes, build confidence."
+    )
+
+    # ── Initialize paper trading state ────────────────────
+    if "pt_trades" not in st.session_state:
+        st.session_state["pt_trades"] = load_paper_trades()
+    if "pt_capital" not in st.session_state:
+        st.session_state["pt_capital"] = 100000.0
+    if "pt_balance" not in st.session_state:
+        # Calculate balance from closed trades
+        _closed_pnl = sum(
+            t.get("pnl_rs", 0)
+            for t in st.session_state["pt_trades"]
+            if t.get("status") == "CLOSED"
+        )
+        st.session_state["pt_balance"] = (
+            st.session_state["pt_capital"] + _closed_pnl
+        )
+
+    # ── Capital settings ───────────────────────────────────
+    with st.expander("⚙️ Settings", expanded=False):
+        _set1, _set2 = st.columns(2)
+        with _set1:
+            _new_cap = st.number_input(
+                "Starting capital (₹)",
+                value=st.session_state["pt_capital"],
+                step=10000.0, min_value=10000.0,
+                key="pt_cap_input"
+            )
+        with _set2:
+            if st.button(
+                "Reset Paper Trading",
+                key="pt_reset",
+                type="secondary"
+            ):
+                st.session_state["pt_trades"]  = []
+                st.session_state["pt_capital"] = _new_cap
+                st.session_state["pt_balance"] = _new_cap
+                save_paper_trades([])
+                st.success("Paper trading reset ✅")
+                st.rerun()
+
+    # ── Performance Dashboard ──────────────────────────────
+    _pt_all    = st.session_state["pt_trades"]
+    _pt_closed = [t for t in _pt_all if t.get("status")=="CLOSED"]
+    _pt_open   = [t for t in _pt_all if t.get("status")=="OPEN"]
+
+    _total_pnl = sum(t.get("pnl_rs",0) for t in _pt_closed)
+    _wins      = [t for t in _pt_closed if t.get("pnl_rs",0) > 0]
+    _losses    = [t for t in _pt_closed if t.get("pnl_rs",0) <= 0]
+    _win_rate  = round(len(_wins)/len(_pt_closed)*100,1) if _pt_closed else 0
+    _balance   = st.session_state["pt_capital"] + _total_pnl
+    _ret_pct   = round(_total_pnl/st.session_state["pt_capital"]*100,2)
+
+    # Dashboard metrics
+    dm1,dm2,dm3,dm4,dm5 = st.columns(5)
+    dm1.metric(
+        "Virtual Capital",
+        f"₹{_balance:,.0f}",
+        delta=f"₹{_total_pnl:+,.0f}",
+        delta_color="normal" if _total_pnl >= 0 else "inverse"
+    )
+    dm2.metric("Total Trades", len(_pt_closed))
+    dm3.metric("Win Rate",     f"{_win_rate}%")
+    dm4.metric(
+        "Total P&L",
+        f"₹{_total_pnl:+,.0f}",
+        delta=f"{_ret_pct:+.2f}%",
+        delta_color="normal" if _total_pnl >= 0 else "inverse"
+    )
+    dm5.metric("Open Trades", len(_pt_open))
+
+    # Performance bar
+    if _pt_closed:
+        _avg_win  = round(sum(t["pnl_rs"] for t in _wins)  /max(len(_wins),1),0)
+        _avg_loss = round(sum(t["pnl_rs"] for t in _losses)/max(len(_losses),1),0)
+        _pf = round(abs(sum(t["pnl_rs"] for t in _wins)) / (abs(sum(t["pnl_rs"] for t in _losses))+0.001),2)
+
+        st.markdown(
+            f"<div style='background:#f8fafc;border-radius:10px;"
+            f"padding:12px 16px;margin:8px 0;font-size:13px'>"
+            f"Avg Win: <b style='color:#16a34a'>₹{_avg_win:+,.0f}</b> &nbsp;|&nbsp; "
+            f"Avg Loss: <b style='color:#dc2626'>₹{_avg_loss:+,.0f}</b> &nbsp;|&nbsp; "
+            f"Profit Factor: <b>{'🔥 ' if _pf>=1.5 else ''}{_pf}</b> &nbsp;|&nbsp; "
+            f"Return: <b style='color:{'#16a34a' if _ret_pct>=0 else '#dc2626'}'>{_ret_pct:+.2f}%</b>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+    st.markdown("---")
+
+    # ── Enter New Paper Trade ──────────────────────────────
+    st.markdown("### ➕ Enter New Paper Trade")
+    st.caption(
+        "Get signal from Auto Scanner or Signal Hub, "
+        "then enter details here to simulate the trade."
+    )
+
+    with st.form("pt_entry_form"):
+        pf1, pf2, pf3 = st.columns(3)
+        with pf1:
+            pt_stock  = st.text_input("Stock name", value="NIFTY 50")
+            pt_signal = st.selectbox("Signal", ["BUY CE","BUY PE"])
+            pt_score  = st.slider("Signal score", 5, 10, 8)
+        with pf2:
+            pt_entry  = st.number_input("Entry price (₹)", value=0.0, step=0.5)
+            pt_sl     = st.number_input("Stop loss (₹)",   value=0.0, step=0.5)
+            pt_target = st.number_input("Target (₹)",      value=0.0, step=0.5)
+        with pf3:
+            pt_strike = st.text_input("Option strike", placeholder="e.g. 24000 CE")
+            pt_premium= st.number_input("Premium paid (₹)", value=0.0, step=0.5)
+            pt_lots   = st.number_input("Lots", value=1, min_value=1)
+            pt_lotsize= st.number_input("Lot size", value=50, min_value=1)
+            pt_style  = st.selectbox(
+                "Trade style",
+                ["Intraday","Swing 1 day","Swing 3 days","Swing 1 week"]
+            )
+
+        pt_submit = st.form_submit_button(
+            "📝 Enter Paper Trade",
+            use_container_width=True,
+            type="primary"
+        )
+
+    if pt_submit:
+        if pt_entry > 0 and pt_sl > 0 and pt_target > 0:
+            import datetime as _ptdt
+            _pt_sym = STOCKS.get(pt_stock, "^NSEI")
+            _pt_invest = round(pt_premium * pt_lotsize * pt_lots, 2) if pt_premium > 0 else 0
+            _new_trade = {
+                "id":        len(_pt_all) + 1,
+                "stock":     pt_stock,
+                "sym":       _pt_sym,
+                "signal":    pt_signal,
+                "score":     pt_score,
+                "entry":     pt_entry,
+                "sl":        pt_sl,
+                "target":    pt_target,
+                "strike":    pt_strike,
+                "premium":   pt_premium,
+                "lots":      pt_lots,
+                "lot_size":  pt_lotsize,
+                "invested":  _pt_invest,
+                "style":     pt_style,
+                "date":      _ptdt.datetime.now().strftime("%d %b %Y"),
+                "time":      _ptdt.datetime.now().strftime("%H:%M"),
+                "status":    "OPEN",
+                "exit_price": 0.0,
+                "exit_premium": 0.0,
+                "pnl_pts":   0.0,
+                "pnl_rs":    0.0,
+                "result":    "",
+                "notes":     "",
+            }
+            st.session_state["pt_trades"].append(_new_trade)
+            save_paper_trades(st.session_state["pt_trades"])
+            st.success(
+                f"✅ Paper trade entered — "
+                f"{pt_stock} {pt_signal} at ₹{pt_entry}"
+            )
+            st.rerun()
+        else:
+            st.error("Please fill Entry, Stop Loss and Target.")
+
+    # ── Open Paper Trades ──────────────────────────────────
+    if _pt_open:
+        st.markdown("---")
+        st.markdown(f"### 📊 Open Paper Trades ({len(_pt_open)})")
+
+        for _pi, _pt in enumerate(_pt_open):
+            _is_ce  = _pt["signal"] == "BUY CE"
+            _pt_lp  = live_price(_pt["sym"])
+            _cp_now = _pt_lp["p"] if _pt_lp["ok"] else _pt["entry"]
+
+            # Current P&L
+            _pnl_pts = (
+                (_cp_now - _pt["entry"]) if _is_ce
+                else (_pt["entry"] - _cp_now)
+            )
+            _pnl_pct = round(_pnl_pts / _pt["entry"] * 100, 2)
+            _pnl_col = "#16a34a" if _pnl_pts >= 0 else "#dc2626"
+
+            # SL / Target check
+            _sl_hit  = ((_cp_now <= _pt["sl"]) if _is_ce else (_cp_now >= _pt["sl"]))
+            _tgt_hit = ((_cp_now >= _pt["target"]) if _is_ce else (_cp_now <= _pt["target"]))
+
+            _border = (
+                "#dc2626" if _sl_hit else
+                "#16a34a" if _tgt_hit else
+                "#3b82f6"
+            )
+
+            st.markdown(
+                f"<div style='background:#f8fafc;"
+                f"border:2px solid {_border};"
+                f"border-radius:12px;padding:16px;"
+                f"margin-bottom:10px'>"
+                f"<div style='display:flex;justify-content:"
+                f"space-between;align-items:center;"
+                f"margin-bottom:10px'>"
+                f"<div>"
+                f"<span style='font-size:17px;font-weight:700;"
+                f"color:#1e293b'>{_pt['stock']}</span>"
+                f"<span style='background:#1e293b;color:white;"
+                f"padding:2px 10px;border-radius:10px;"
+                f"font-size:12px;margin-left:8px'>{_pt['signal']}</span>"
+                f"<span style='font-size:11px;color:#64748b;"
+                f"margin-left:8px'>{_pt['date']} {_pt['time']} | "
+                f"{_pt['style']} | Score {_pt['score']}/10</span>"
+                f"</div>"
+                f"<div style='font-size:18px;font-weight:700;"
+                f"color:{_pnl_col}'>{_pnl_pts:+.2f} pts "
+                f"({_pnl_pct:+.2f}%)</div></div>"
+
+                + (
+                    "<div style='background:#fef2f2;color:#dc2626;"
+                    "border-radius:6px;padding:6px 12px;"
+                    "font-weight:700;margin-bottom:8px'>"
+                    "🔴 STOP LOSS HIT — Close this trade!</div>"
+                    if _sl_hit else
+                    "<div style='background:#f0fdf4;color:#16a34a;"
+                    "border-radius:6px;padding:6px 12px;"
+                    "font-weight:700;margin-bottom:8px'>"
+                    "🟢 TARGET HIT — Book profit!</div>"
+                    if _tgt_hit else ""
+                ) +
+
+                f"<div style='display:grid;"
+                f"grid-template-columns:repeat(5,1fr);gap:8px'>"
+                f"<div style='background:white;border-radius:8px;"
+                f"padding:10px;text-align:center'>"
+                f"<div style='font-size:10px;color:#64748b'>Entry</div>"
+                f"<div style='font-size:14px;font-weight:700;"
+                f"color:#374151'>₹{_pt['entry']:,.2f}</div></div>"
+                f"<div style='background:white;border-radius:8px;"
+                f"padding:10px;text-align:center'>"
+                f"<div style='font-size:10px;color:#64748b'>Current</div>"
+                f"<div style='font-size:14px;font-weight:700;"
+                f"color:{_pnl_col}'>₹{_cp_now:,.2f}</div></div>"
+                f"<div style='background:#fef2f2;border-radius:8px;"
+                f"padding:10px;text-align:center'>"
+                f"<div style='font-size:10px;color:#64748b'>SL</div>"
+                f"<div style='font-size:14px;font-weight:700;"
+                f"color:#dc2626'>₹{_pt['sl']:,.2f}</div></div>"
+                f"<div style='background:#f0fdf4;border-radius:8px;"
+                f"padding:10px;text-align:center'>"
+                f"<div style='font-size:10px;color:#64748b'>Target</div>"
+                f"<div style='font-size:14px;font-weight:700;"
+                f"color:#16a34a'>₹{_pt['target']:,.2f}</div></div>"
+                f"<div style='background:#eff6ff;border-radius:8px;"
+                f"padding:10px;text-align:center'>"
+                f"<div style='font-size:10px;color:#64748b'>Premium</div>"
+                f"<div style='font-size:14px;font-weight:700;"
+                f"color:#1d4ed8'>₹{_pt['premium']:,.0f}</div></div>"
+                f"</div></div>",
+                unsafe_allow_html=True
+            )
+
+            # Close trade form
+            with st.expander(f"Close this trade — {_pt['stock']}"):
+                _cl1, _cl2, _cl3 = st.columns(3)
+                with _cl1:
+                    _exit_px = st.number_input(
+                        "Exit stock price (₹)",
+                        value=float(_cp_now),
+                        step=0.5,
+                        key=f"pt_exit_px_{_pi}"
+                    )
+                with _cl2:
+                    _exit_prem = st.number_input(
+                        "Exit option premium (₹)",
+                        value=float(_pt["premium"]),
+                        step=0.5,
+                        key=f"pt_exit_prem_{_pi}"
+                    )
+                with _cl3:
+                    _exit_notes = st.text_input(
+                        "Notes",
+                        placeholder="Why did you exit?",
+                        key=f"pt_notes_{_pi}"
+                    )
+
+                if st.button(
+                    f"✅ Close Trade",
+                    key=f"pt_close_{_pi}",
+                    type="primary",
+                    use_container_width=True
+                ):
+                    # Calculate P&L
+                    _pnl_stock = (
+                        (_exit_px - _pt["entry"]) if _is_ce
+                        else (_pt["entry"] - _exit_px)
+                    )
+                    _pnl_option = (
+                        (_exit_prem - _pt["premium"])
+                        * _pt["lot_size"] * _pt["lots"]
+                    ) if _pt["premium"] > 0 else 0
+
+                    _final_pnl = _pnl_option if _pt["premium"] > 0 else (
+                        _pnl_stock * _pt["lot_size"] * _pt["lots"]
+                    )
+                    _result = "WIN" if _final_pnl > 0 else "LOSS"
+
+                    import datetime as _cdt
+                    _pt["exit_price"]   = _exit_px
+                    _pt["exit_premium"] = _exit_prem
+                    _pt["pnl_pts"]      = round(_pnl_stock, 2)
+                    _pt["pnl_rs"]       = round(_final_pnl, 2)
+                    _pt["result"]       = _result
+                    _pt["notes"]        = _exit_notes
+                    _pt["exit_date"]    = _cdt.datetime.now().strftime("%d %b %Y %H:%M")
+                    _pt["status"]       = "CLOSED"
+
+                    save_paper_trades(st.session_state["pt_trades"])
+                    st.success(
+                        f"{'✅ WIN' if _result=='WIN' else '❌ LOSS'} — "
+                        f"₹{_final_pnl:+,.0f} P&L recorded!"
+                    )
+                    st.rerun()
+
+    # ── Trade History ──────────────────────────────────────
+    if _pt_closed:
+        st.markdown("---")
+        st.markdown(f"### 📋 Trade History ({len(_pt_closed)} trades)")
+
+        # Equity curve
+        import plotly.graph_objects as _ptgo
+        _running = [st.session_state["pt_capital"]]
+        for _t in _pt_closed:
+            _running.append(_running[-1] + _t["pnl_rs"])
+
+        _fig_eq = _ptgo.Figure()
+        _fig_eq.add_trace(_ptgo.Scatter(
+            y=_running,
+            mode="lines+markers",
+            line=dict(
+                color="#16a34a" if _running[-1] >= _running[0]
+                else "#dc2626",
+                width=2
+            ),
+            fill="tozeroy",
+            fillcolor=(
+                "rgba(22,163,74,0.1)"
+                if _running[-1] >= _running[0]
+                else "rgba(220,38,38,0.1)"
+            ),
+            name="Portfolio Value"
+        ))
+        _fig_eq.add_hline(
+            y=st.session_state["pt_capital"],
+            line_dash="dash", line_color="#94a3b8",
+            annotation_text="Starting capital"
+        )
+        _fig_eq.update_layout(
+            template="plotly_white", height=250,
+            title="Paper Trading Equity Curve",
+            yaxis_title="Portfolio Value (₹)",
+            margin=dict(l=10,r=10,t=40,b=10)
+        )
+        st.plotly_chart(_fig_eq, use_container_width=True)
+
+        # Trade history table
+        _hist_rows = []
+        for _t in reversed(_pt_closed):
+            _hist_rows.append({
+                "Date":    _t.get("date",""),
+                "Stock":   _t["stock"],
+                "Signal":  _t["signal"],
+                "Score":   _t["score"],
+                "Entry":   f"₹{_t['entry']:,.2f}",
+                "Exit":    f"₹{_t.get('exit_price',0):,.2f}",
+                "P&L pts": f"{_t['pnl_pts']:+.2f}",
+                "P&L ₹":   f"₹{_t['pnl_rs']:+,.0f}",
+                "Result":  _t["result"],
+                "Notes":   _t.get("notes",""),
+            })
+
+        import pandas as _ptpd
+        _hist_df = _ptpd.DataFrame(_hist_rows)
+        st.dataframe(
+            _hist_df, hide_index=True,
+            use_container_width=True
+        )
+
+        # Export to Excel
+        if st.button(
+            "📥 Export Paper Trading History",
+            key="pt_export",
+            use_container_width=True
+        ):
+            import io
+            from openpyxl import Workbook as _WBPT
+            from openpyxl.styles import (
+                PatternFill as _PFPT,
+                Font as _FntPT,
+                Alignment as _AlPT
+            )
+            _wb = _WBPT()
+            _ws = _wb.active
+            _ws.title = "Paper Trades"
+            _pt_exp_hdrs = [
+                "Date","Stock","Signal","Score","Entry","Exit",
+                "P&L pts","P&L ₹","Result","Style","Notes"
+            ]
+            _hf = _PFPT("solid", fgColor="0f766e")
+            for _ci,_h in enumerate(_pt_exp_hdrs,1):
+                _c = _ws.cell(row=1,column=_ci,value=_h)
+                _c.fill=_hf
+                _c.font=_FntPT(color="FFFFFF",bold=True)
+                _c.alignment=_AlPT(horizontal="center")
+                _ws.column_dimensions[_c.column_letter].width=max(12,len(_h)+2)
+
+            _gf=_PFPT("solid",fgColor="d1fae5")
+            _rf=_PFPT("solid",fgColor="fee2e2")
+            for _ri,_t in enumerate(_pt_closed,2):
+                _trow=[
+                    _t.get("date",""),_t["stock"],_t["signal"],
+                    _t["score"],_t["entry"],_t.get("exit_price",0),
+                    _t["pnl_pts"],_t["pnl_rs"],_t["result"],
+                    _t["style"],_t.get("notes","")
+                ]
+                _tfl=_gf if _t["pnl_rs"]>0 else _rf
+                for _ci,_v in enumerate(_trow,1):
+                    _c=_ws.cell(row=_ri,column=_ci,value=_v)
+                    _c.fill=_tfl
+                    _c.alignment=_AlPT(horizontal="center")
+
+            _buf=io.BytesIO()
+            _wb.save(_buf); _buf.seek(0)
+            st.download_button(
+                label="📥 Download Paper Trading Excel",
+                data=_buf.getvalue(),
+                file_name="paper_trades.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="pt_dl"
+            )
+
+
+# ╔══════════════════════════════════════════════════════╗
+# ║  TAB 12 — AUTO ORDERS                               ║
+# ╚══════════════════════════════════════════════════════╝
+with T12:
+    st.markdown("### ⚡ Auto Order Placement")
+
+    # ── Safety gate — must be explicitly enabled ───────────
+    st.warning(
+        "⚠️ **This tab places REAL orders on your Zerodha account.** "
+        "Money will be debited from your real trading account. "
+        "Start with 1 lot minimum. Test thoroughly before scaling up."
+    )
+
+    # Master enable switch — off by default
+    _ao_enabled = st.toggle(
+        "Enable Auto Order Placement",
+        value=st.session_state.get("ao_enabled", False),
+        key="ao_toggle",
+        help="Turn ON only when you are ready to place real orders"
+    )
+    st.session_state["ao_enabled"] = _ao_enabled
+
+    if not _ao_enabled:
+        st.info(
+            "Auto orders are currently **disabled**. "
+            "Toggle ON above when you are ready. "
+            "We recommend paper trading for 2 weeks first "
+            "before enabling this."
+        )
+        st.markdown("""
+        ### 📋 How Auto Orders work
+
+        **Step 1** — Enable the toggle above
+
+        **Step 2** — Sync your Zerodha portfolio
+        Click **Sync Portfolio** to see your current positions
+
+        **Step 3** — Place order from Signal Hub
+        When Signal Hub shows a Diamond or Strong signal →
+        click **Place Order** → order goes to Zerodha instantly
+
+        **Step 4** — GTT stop loss set automatically
+        Immediately after entry — GTT order placed at your SL level
+
+        **Step 5** — Trade added to Trade Manager automatically
+        No manual entry needed — trade appears in Trade Manager
+
+        ### ⚠️ Important rules
+        - Always start with **1 lot only**
+        - Keep GTT stop loss active at all times
+        - Exit by **2:45 PM** for intraday trades
+        - Never place orders during 9:15-10:00 AM opening session
+        """)
+    else:
+        # Check Kite connection
+        _kite_ao = get_kite()
+        if not _kite_ao:
+            st.error(
+                "❌ Kite not connected. "
+                "Login with Zerodha Kite in the sidebar first."
+            )
+        else:
+            st.success("✅ Kite connected — Ready to place orders")
+
+            # ── Portfolio Sync ─────────────────────────────
+            st.markdown("---")
+            st.markdown("#### 📊 Portfolio Sync")
+
+            if st.button(
+                "🔄 Sync Portfolio from Zerodha",
+                key="ao_sync",
+                type="primary"
+            ):
+                with st.spinner("Fetching positions from Zerodha..."):
+                    try:
+                        _positions = _kite_ao.positions()
+                        _holdings  = _kite_ao.holdings()
+                        st.session_state["ao_positions"] = _positions
+                        st.session_state["ao_holdings"]  = _holdings
+                        st.success("✅ Portfolio synced!")
+                    except Exception as _e:
+                        st.error(f"Failed to sync: {_e}")
+
+            # Show positions
+            _positions = st.session_state.get("ao_positions", {})
+            if _positions:
+                _net_pos = _positions.get("net", [])
+                if _net_pos:
+                    st.markdown("**Open Positions:**")
+                    import pandas as _aopd
+                    _pos_rows = []
+                    for _p in _net_pos:
+                        if _p.get("quantity", 0) != 0:
+                            _pnl = _p.get("pnl", 0)
+                            _pos_rows.append({
+                                "Symbol":    _p.get("tradingsymbol",""),
+                                "Qty":       _p.get("quantity",0),
+                                "Avg Price": f"₹{_p.get('average_price',0):,.2f}",
+                                "LTP":       f"₹{_p.get('last_price',0):,.2f}",
+                                "P&L":       f"₹{_pnl:+,.0f}",
+                                "Product":   _p.get("product",""),
+                            })
+                    if _pos_rows:
+                        st.dataframe(
+                            _aopd.DataFrame(_pos_rows),
+                            hide_index=True,
+                            use_container_width=True
+                        )
+                else:
+                    st.info("No open positions currently.")
+
+            # ── Place Order ────────────────────────────────
+            st.markdown("---")
+            st.markdown("#### 📝 Place New Order")
+            st.caption(
+                "Get signal from Scanner or Signal Hub first, "
+                "then fill details here."
+            )
+
+            _ao1, _ao2, _ao3 = st.columns(3)
+            with _ao1:
+                _ao_stock   = st.text_input(
+                    "Stock/Index", value="NIFTY 50", key="ao_stock"
+                )
+                _ao_signal  = st.selectbox(
+                    "Signal", ["BUY CE","BUY PE"], key="ao_signal"
+                )
+                _ao_exchange= st.selectbox(
+                    "Exchange", ["NFO","NSE","BSE"], key="ao_exch"
+                )
+            with _ao2:
+                _ao_symbol  = st.text_input(
+                    "Exact Zerodha symbol",
+                    placeholder="e.g. NIFTY2452024000CE",
+                    key="ao_symbol",
+                    help="Copy exact symbol from Zerodha options chain"
+                )
+                _ao_qty     = st.number_input(
+                    "Quantity (shares)", value=50,
+                    min_value=1, key="ao_qty"
+                )
+                _ao_price   = st.number_input(
+                    "Limit price (₹, 0=Market)",
+                    value=0.0, step=0.5, key="ao_price"
+                )
+            with _ao3:
+                _ao_sl      = st.number_input(
+                    "Stop loss (stock price ₹)",
+                    value=0.0, step=0.5, key="ao_sl"
+                )
+                _ao_target  = st.number_input(
+                    "Target (stock price ₹)",
+                    value=0.0, step=0.5, key="ao_target"
+                )
+                _ao_product = st.selectbox(
+                    "Product type",
+                    ["MIS (Intraday)","NRML (Overnight)"],
+                    key="ao_product"
+                )
+
+            # Order preview
+            if _ao_symbol:
+                _prod = "MIS" if "MIS" in _ao_product else "NRML"
+                _order_type = "MARKET" if _ao_price == 0 else "LIMIT"
+                st.markdown(
+                    f"<div style='background:#fffbeb;"
+                    f"border:1.5px solid #f59e0b;"
+                    f"border-radius:10px;padding:14px;"
+                    f"margin:8px 0;font-size:13px'>"
+                    f"<b>Order Preview:</b><br>"
+                    f"BUY {_ao_qty} × {_ao_symbol} "
+                    f"@ {'MARKET' if _ao_price==0 else f'₹{_ao_price}'} "
+                    f"| {_prod} | {_order_type}<br>"
+                    f"GTT Stop Loss: ₹{_ao_sl} | "
+                    f"Target: ₹{_ao_target}"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+            # Confirmation checkbox — extra safety
+            _ao_confirm = st.checkbox(
+                "✅ I confirm this is a REAL order with REAL money",
+                key="ao_confirm"
+            )
+
+            if st.button(
+                "⚡ Place Order on Zerodha",
+                key="ao_place",
+                type="primary",
+                use_container_width=True,
+                disabled=not (_ao_confirm and bool(_ao_symbol))
+            ):
+                with st.spinner("Placing order..."):
+                    try:
+                        _prod = (
+                            "MIS" if "MIS" in _ao_product
+                            else "NRML"
+                        )
+                        _o_type = (
+                            "MARKET" if _ao_price == 0
+                            else "LIMIT"
+                        )
+                        _order_id = _kite_ao.place_order(
+                            tradingsymbol=_ao_symbol,
+                            exchange=_ao_exchange,
+                            transaction_type="BUY",
+                            quantity=int(_ao_qty),
+                            product=_prod,
+                            order_type=_o_type,
+                            price=float(_ao_price) if _ao_price > 0 else None,
+                            variety="regular"
+                        )
+                        st.success(
+                            f"✅ Order placed! Order ID: {_order_id}"
+                        )
+
+                        # Place GTT stop loss if SL provided
+                        if _ao_sl > 0:
+                            try:
+                                # Get LTP for GTT
+                                _lp_ao = live_price(
+                                    STOCKS.get(_ao_stock,"^NSEI")
+                                )
+                                _ltp_ao = _lp_ao["p"] if _lp_ao["ok"] else _ao_sl
+
+                                _kite_ao.place_gtt(
+                                    trigger_type="single",
+                                    tradingsymbol=_ao_symbol,
+                                    exchange=_ao_exchange,
+                                    trigger_values=[float(_ao_sl)],
+                                    last_price=float(_ltp_ao),
+                                    orders=[{
+                                        "transaction_type": "SELL",
+                                        "quantity":  int(_ao_qty),
+                                        "product":   _prod,
+                                        "order_type":"MARKET",
+                                        "price":     float(_ao_sl),
+                                    }]
+                                )
+                                st.success(
+                                    f"✅ GTT Stop Loss set at ₹{_ao_sl}"
+                                )
+                            except Exception as _ge:
+                                st.warning(
+                                    f"GTT failed: {_ge}. "
+                                    "Set stop loss manually in Zerodha."
+                                )
+
+                        # Auto-add to Trade Manager
+                        import datetime as _aodt
+                        _new_tm = {
+                            "id":        len(st.session_state.get("active_trades",[])) + 1,
+                            "stock":     _ao_stock,
+                            "sym":       STOCKS.get(_ao_stock,"^NSEI"),
+                            "type":      _ao_signal,
+                            "entry":     _lp_ao["p"] if _lp_ao["ok"] else 0,
+                            "sl":        _ao_sl,
+                            "target":    _ao_target,
+                            "lots":      1,
+                            "lots_rem":  1,
+                            "style":     "Intraday (exit 2:45 PM)",
+                            "tf":        "1h",
+                            "opt_price": _ao_price,
+                            "added_at":  _aodt.datetime.now().strftime("%d %b %H:%M"),
+                            "status":    "ACTIVE",
+                            "last_action": f"Auto order {_order_id}",
+                        }
+                        if "active_trades" not in st.session_state:
+                            st.session_state["active_trades"] = []
+                        st.session_state["active_trades"].append(_new_tm)
+                        save_trades(st.session_state["active_trades"])
+                        st.info(
+                            "✅ Trade added to Trade Manager automatically."
+                        )
+
+                    except Exception as _oe:
+                        st.error(
+                            f"❌ Order failed: {_oe}. "
+                            "Check symbol name and Kite connection."
+                        )
+
+            # ── Order History ──────────────────────────────
+            st.markdown("---")
+            st.markdown("#### 📋 Today's Order History")
+
+            if st.button("Load Order History", key="ao_history"):
+                try:
+                    _orders = _kite_ao.orders()
+                    if _orders:
+                        import pandas as _ohpd
+                        _oh_rows = []
+                        for _o in _orders:
+                            _oh_rows.append({
+                                "Time":     _o.get("order_timestamp",""),
+                                "Symbol":   _o.get("tradingsymbol",""),
+                                "Type":     _o.get("transaction_type",""),
+                                "Qty":      _o.get("quantity",0),
+                                "Price":    f"₹{_o.get('average_price',0):,.2f}",
+                                "Status":   _o.get("status",""),
+                                "Order ID": _o.get("order_id",""),
+                            })
+                        st.dataframe(
+                            _ohpd.DataFrame(_oh_rows),
+                            hide_index=True,
+                            use_container_width=True
+                        )
+                    else:
+                        st.info("No orders placed today.")
+                except Exception as _he:
+                    st.error(f"Failed to load orders: {_he}")
 
 
 # ── Auto refresh ──────────────────────────────────────────

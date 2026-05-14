@@ -12569,17 +12569,62 @@ with T12:
                     "Exchange", ["NFO","NSE","BSE"], key="ao_exch"
                 )
             with _ao2:
-                _ao_symbol  = st.text_input(
-                    "Exact Zerodha symbol",
-                    placeholder="e.g. NIFTY2452024000CE",
-                    key="ao_symbol",
-                    help="Copy exact symbol from Zerodha options chain"
+                # Smart symbol builder
+                st.caption("Option details")
+                _ao_strike = st.number_input(
+                    "Strike price",
+                    value=0.0, step=50.0, key="ao_strike"
                 )
-                _ao_qty     = st.number_input(
+                _ao_opt_type = st.selectbox(
+                    "CE or PE",
+                    ["CE","PE"],
+                    index=0 if "CE" in st.session_state.get("ao_signal","BUY CE") else 1,
+                    key="ao_opt_type"
+                )
+                # Auto-build symbol
+                _ao_sym_prefix = (
+                    "NIFTY" if "NIFTY" in _ao_stock.upper() and "BANK" not in _ao_stock.upper()
+                    else "BANKNIFTY" if "BANK" in _ao_stock.upper()
+                    else _ao_stock.upper().replace(" ","")[:10]
+                )
+                # Get nearest expiry from instruments if available
+                _inst_map = st.session_state.get("kite_inst_map", {})
+                _ao_symbol_auto = ""
+                if _ao_strike > 0:
+                    # Find matching symbols in instruments
+                    _matches = [
+                        k for k in _inst_map.keys()
+                        if _ao_sym_prefix in k
+                        and str(int(_ao_strike)) in k
+                        and k.endswith(_ao_opt_type)
+                    ]
+                    if _matches:
+                        _matches.sort()
+                        _ao_symbol_auto = st.selectbox(
+                            "Select symbol",
+                            _matches[:10],
+                            key="ao_sym_select"
+                        )
+                    else:
+                        _ao_symbol_auto = st.text_input(
+                            "Symbol (type manually)",
+                            placeholder=f"{_ao_sym_prefix}...{int(_ao_strike)}{_ao_opt_type}",
+                            key="ao_symbol"
+                        )
+                else:
+                    _ao_symbol_auto = st.text_input(
+                        "Symbol (enter strike above)",
+                        placeholder="Enter strike price first",
+                        key="ao_symbol",
+                        disabled=True
+                    )
+                _ao_symbol = _ao_symbol_auto
+
+                _ao_qty = st.number_input(
                     "Quantity (shares)", value=50,
                     min_value=1, key="ao_qty"
                 )
-                _ao_price   = st.number_input(
+                _ao_price = st.number_input(
                     "Limit price (₹, 0=Market)",
                     value=0.0, step=0.5, key="ao_price"
                 )
@@ -12602,6 +12647,11 @@ with T12:
             if _ao_symbol:
                 _prod = "MIS" if "MIS" in _ao_product else "NRML"
                 _order_type = "MARKET" if _ao_price == 0 else "LIMIT"
+                _prod_note = (
+                    "Intraday — auto squared off at 3:15 PM if not exited"
+                    if _prod == "MIS"
+                    else "Overnight — position carries to next day"
+                )
                 st.markdown(
                     f"<div style='background:#fffbeb;"
                     f"border:1.5px solid #f59e0b;"
@@ -12610,7 +12660,7 @@ with T12:
                     f"<b>Order Preview:</b><br>"
                     f"BUY {_ao_qty} × {_ao_symbol} "
                     f"@ {'MARKET' if _ao_price==0 else f'₹{_ao_price}'} "
-                    f"| {_prod} | {_order_type}<br>"
+                    f"| <b>{_prod}</b> — {_prod_note}<br>"
                     f"GTT Stop Loss: ₹{_ao_sl} | "
                     f"Target: ₹{_ao_target}"
                     f"</div>",

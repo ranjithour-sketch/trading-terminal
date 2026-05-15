@@ -6689,7 +6689,7 @@ with T3:
                         f"</div></div>",
                         unsafe_allow_html=True
                     )
-                    _dc1, _dc2, _dc3 = st.columns(3)
+                    _dc1, _dc2, _dc3, _dc4 = st.columns(4)
                     with _dc1:
                         if st.button(
                             "📊 Trade Setup",
@@ -6702,6 +6702,39 @@ with T3:
                             st.rerun()
                     with _dc2:
                         if st.button(
+                            "🛡️ Add to TM",
+                            key=f"dia_tm_{idx_d}",
+                            use_container_width=True,
+                            help="Add to Trade Manager instantly"
+                        ):
+                            import datetime as _dtmdt
+                            if "active_trades" not in st.session_state:
+                                st.session_state["active_trades"] = load_trades()
+                            _dia_tm = {
+                                "id":          len(st.session_state["active_trades"]) + 1,
+                                "stock":       r["Stock"],
+                                "sym":         r["Sym"],
+                                "type":        r["Action"],
+                                "entry":       r["Entry"],
+                                "sl":          r["SL"],
+                                "target":      r["T1"],
+                                "lots":        1,
+                                "lots_rem":    1,
+                                "style":       "Intraday (exit 2:45 PM)",
+                                "tf":          scan_tf,
+                                "opt_price":   0.0,
+                                "added_at":    _dtmdt.datetime.now().strftime("%d %b %H:%M"),
+                                "status":      "ACTIVE",
+                                "last_action": "Added from 💎 Diamond Scanner",
+                                "atm_strike":  r.get("ATM",""),
+                            }
+                            st.session_state["active_trades"].append(_dia_tm)
+                            save_trades(st.session_state["active_trades"])
+                            st.success(
+                                f"✅ 💎 {r['Stock']} added to Trade Manager!"
+                            )
+                    with _dc3:
+                        if st.button(
                             "🔬 Full Analysis",
                             key=f"dia_fa_{idx_d}",
                             use_container_width=True
@@ -6710,7 +6743,7 @@ with T3:
                             st.session_state[_dk] = (
                                 not st.session_state.get(_dk, False)
                             )
-                    with _dc3:
+                    with _dc4:
                         if tg_configured():
                             if st.button(
                                 "📱 Send Signal",
@@ -7657,7 +7690,7 @@ with T3:
                         + "</div>",
                         unsafe_allow_html=True
                     )
-                    bc1, bc2 = st.columns(2)
+                    bc1, bc2, bc3 = st.columns(3)
                     with bc1:
                         if st.button(f"📊 Analyse", key=f"scan_an_{idx_r}",
                                      type="primary", use_container_width=True):
@@ -7665,6 +7698,41 @@ with T3:
                             st.session_state["st"] = r["Sym"]
                             st.rerun()
                     with bc2:
+                        if st.button(
+                            f"🛡️ Add to Trade Manager",
+                            key=f"scan_tm_{idx_r}",
+                            use_container_width=True,
+                            help="Add this signal directly to Trade Manager"
+                        ):
+                            import datetime as _tmdt
+                            # Pre-fill all details from signal
+                            if "active_trades" not in st.session_state:
+                                st.session_state["active_trades"] = load_trades()
+                            _new_tm = {
+                                "id":        len(st.session_state["active_trades"]) + 1,
+                                "stock":     r["Stock"],
+                                "sym":       r["Sym"],
+                                "type":      r["Action"],
+                                "entry":     r["Entry"],
+                                "sl":        r["SL"],
+                                "target":    r["T1"],
+                                "lots":      1,
+                                "lots_rem":  1,
+                                "style":     "Intraday (exit 2:45 PM)",
+                                "tf":        scan_tf,
+                                "opt_price": 0.0,
+                                "added_at":  _tmdt.datetime.now().strftime("%d %b %H:%M"),
+                                "status":    "ACTIVE",
+                                "last_action": "Added from Scanner",
+                                "atm_strike": r.get("ATM",""),
+                            }
+                            st.session_state["active_trades"].append(_new_tm)
+                            save_trades(st.session_state["active_trades"])
+                            st.success(
+                                f"✅ {r['Stock']} {r['Action']} "
+                                f"added to Trade Manager!"
+                            )
+                    with bc3:
                         if tg_configured():
                             if st.button(f"📱 Send Signal", key=f"scan_tg_{idx_r}",
                                          use_container_width=True):

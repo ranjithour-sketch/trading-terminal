@@ -6202,6 +6202,57 @@ with T3:
                 else:
                     confidence = "LOW"
 
+                # ── Signal Validity Timer ──────────────────
+                # Estimate how many candles the signal will stay valid
+                # Based on RSI distance from zone edge, volume, momentum
+
+                _rsi_now = sig["rv"]
+                _rsi_prev= float(sig["rsis"].iloc[-2]) if hasattr(sig.get("rsis",""), "iloc") else _rsi_now
+
+                # RSI momentum — is it moving toward or away from zone?
+                _rsi_slope = _rsi_now - _rsi_prev
+
+                if direction == "UPTREND":
+                    # CE signal — RSI should be 55-68
+                    # Distance from danger zone (75 = overbought)
+                    _rsi_dist = 75 - _rsi_now
+                    _rsi_moving_ok = _rsi_slope > 0 and _rsi_now < 68
+                else:
+                    # PE signal — RSI should be 32-45
+                    # Distance from danger zone (25 = oversold)
+                    _rsi_dist = _rsi_now - 25
+                    _rsi_moving_ok = _rsi_slope < 0 and _rsi_now > 32
+
+                # Volume momentum
+                _vol_ratio = sig.get("vol_ratio", 1.0)
+                _vol_ok    = _vol_ratio >= 1.2
+
+                # Price position relative to EMA9
+                _e9v = sig.get("e9v", sig["cp"])
+                _price_dist_pct = abs(sig["cp"] - _e9v) / _e9v * 100
+
+                # Calculate validity candles
+                if _rsi_dist > 15 and _vol_ok and _rsi_moving_ok:
+                    _valid_candles = 6  # ~90 min on 15m
+                    _validity = "🟢 Strong — Valid ~6 candles (90 min)"
+                    _validity_col = "#16a34a"
+                    _validity_bg  = "#f0fdf4"
+                elif _rsi_dist > 8 and (_vol_ok or _rsi_moving_ok):
+                    _valid_candles = 4  # ~60 min on 15m
+                    _validity = "🟡 Moderate — Valid ~4 candles (60 min)"
+                    _validity_col = "#d97706"
+                    _validity_bg  = "#fffbeb"
+                elif _rsi_dist > 4:
+                    _valid_candles = 2  # ~30 min on 15m
+                    _validity = "🟠 Short — Valid ~2 candles (30 min). Enter now!"
+                    _validity_col = "#ea580c"
+                    _validity_bg  = "#fff7ed"
+                else:
+                    _valid_candles = 1
+                    _validity = "🔴 Expiring — Enter immediately or skip!"
+                    _validity_col = "#dc2626"
+                    _validity_bg  = "#fef2f2"
+
                 # Combined score
                 combined = round(
                     best*0.6 + hist["score"]*0.4, 1
@@ -6252,9 +6303,13 @@ with T3:
                     "CPR_Pivot":   sig.get("cpr_pivot",0),
                     "Virgin_CPR":  sig.get("virgin_cpr",False),
                     # Confidence
-                    "Confidence":  confidence,
-                    "Confirms":    confirms,
-                    "Conflicts":   conflicts,
+                    "Confidence":   confidence,
+                    "Confirms":     confirms,
+                    "Conflicts":    conflicts,
+                    "Validity":     _validity,
+                    "ValidCandles": _valid_candles,
+                    "ValidityCol":  _validity_col,
+                    "ValidityBg":   _validity_bg,
                 }
                 results.append(result)
 
@@ -7592,7 +7647,14 @@ with T3:
                         f"<b>{r['OptType']}</b> | ATM ✅ {r['ATM']} | ITM {r['ITM']} | OTM {r['OTM']}"
                         f"{'  ✨ Virgin CPR' if r.get('Virgin_CPR') else ''}"
                         f" | CPR: Price {r.get('CPR_Pos','—')}</div>"
-                        f"</div>",
+                        + f"<div style='background:{r.get('ValidityBg','#f8fafc')};"
+                          f"border-left:3px solid {r.get('ValidityCol','#94a3b8')};"
+                          f"border-radius:0 6px 6px 0;padding:6px 12px;"
+                          f"margin-top:4px;font-size:12px;"
+                          f"color:{r.get('ValidityCol','#64748b')}'>"
+                          f"⏱️ <b>Signal Validity:</b> "
+                          f"{r.get('Validity','Checking...')}</div>"
+                        + "</div>",
                         unsafe_allow_html=True
                     )
                     bc1, bc2 = st.columns(2)
@@ -7656,6 +7718,129 @@ with T3:
                                 st.rerun()
 
             # ── Score chart ────────────────────────────────────
+
+            # ── Store stocks for Signal Monitor ───────────────
+            if results_sorted:
+                st.session_state["monitor_stocks"] = [
+                    {
+                        "stock": r["Stock"],
+                        "sym":   r["Sym"],
+                        "dir":   r["Direction"],
+                        "score": r["Score"],
+                        "entry": r["Entry"],
+                        "sl":    r["SL"],
+                        "t1":    r["T1"],
+                        "valid": r.get("ValidCandles",4),
+                    }
+                    for r in results_sorted
+                ]
+                st.session_state["monitor_scan_tf"]   = scan_tf
+                st.session_state["monitor_scan_time"] = datetime.now().strftime("%H:%M")
+
+            # ── Signal Monitor ─────────────────────────────────
+            _mlist = st.session_state.get("monitor_stocks",[])
+            if _mlist:
+                st.markdown("---")
+                st.markdown("### 🔭 Signal Monitor")
+                _sct = st.session_state.get("monitor_scan_time","—")
+                _stf = st.session_state.get("monitor_scan_tf","15m")
+                st.caption(
+                    f"Watching {len(_mlist)} stocks from {_sct} scan. "
+                    f"Click Refresh to update status."
+                )
+                _mc1, _mc2 = st.columns([3,1])
+                with _mc2:
+                    _do_mon = st.button(
+                        "🔄 Refresh Monitor",
+                        key="monitor_refresh",
+                        use_container_width=True
+                    )
+
+                _still_v = []; _weaken = []; _expd = []
+
+                for _ms in _mlist:
+                    _ms_lp = live_price(_ms["sym"])
+                    _ms_cp = _ms_lp["p"] if _ms_lp["ok"] else _ms["entry"]
+                    _ms_sig = None
+                    if _do_mon:
+                        try:
+                            _ms_df = candles(_ms["sym"], _stf)
+                            if _ms_df is not None and len(_ms_df)>=55:
+                                _ms_sig = compute_all(_ms_df, _ms_lp)
+                                st.session_state[f"msig_{_ms['stock']}"] = _ms_sig
+                        except Exception:
+                            pass
+                    _ms_sig = _ms_sig or st.session_state.get(f"msig_{_ms['stock']}")
+
+                    _is_ce = _ms["dir"] == "UPTREND"
+                    _sl_hit  = (_ms_cp<=_ms["sl"]) if _is_ce else (_ms_cp>=_ms["sl"])
+                    _tgt_hit = (_ms_cp>=_ms["t1"]) if _is_ce else (_ms_cp<=_ms["t1"])
+                    _pnl = (_ms_cp-_ms["entry"]) if _is_ce else (_ms["entry"]-_ms_cp)
+                    _pnl_col = "#16a34a" if _pnl>=0 else "#dc2626"
+
+                    if _ms_sig:
+                        _cur_dir   = _ms_sig["direction"]
+                        _cur_score = max(_ms_sig["up_score"],_ms_sig["dn_score"])
+                        _cur_rsi   = _ms_sig["rv"]
+                        _cur_vwap  = _ms_sig["vwv"]
+
+                        _chk = sum([
+                            _cur_dir == _ms["dir"],
+                            _cur_score >= 7,
+                            (55<=_cur_rsi<=75) if _is_ce else (25<=_cur_rsi<=45),
+                            (_ms_cp>_cur_vwap) if _is_ce else (_ms_cp<_cur_vwap),
+                        ])
+                    else:
+                        _chk = 3  # assume valid if no fresh data
+
+                    if _sl_hit:
+                        _st="🔴 SL HIT"; _sc="#dc2626"; _sb="#fef2f2"; _sa="Exit immediately"; _expd.append(_ms)
+                    elif _tgt_hit:
+                        _st="🟢 TARGET HIT"; _sc="#16a34a"; _sb="#f0fdf4"; _sa="Book profit!"; _still_v.append(_ms)
+                    elif _chk>=3:
+                        _st="🟢 STILL VALID"; _sc="#16a34a"; _sb="#f0fdf4"; _sa="Hold position"; _still_v.append(_ms)
+                    elif _chk==2:
+                        _st="🟡 WEAKENING"; _sc="#d97706"; _sb="#fffbeb"; _sa="Consider 50% exit"; _weaken.append(_ms)
+                    else:
+                        _st="🔴 EXPIRED"; _sc="#dc2626"; _sb="#fef2f2"; _sa="Signal no longer valid"; _expd.append(_ms)
+
+                    _rsi_disp = f"RSI {_ms_sig['rv']:.0f}" if _ms_sig else "—"
+                    st.markdown(
+                        f"<div style='background:{_sb};border:1.5px solid {_sc};"
+                        f"border-radius:10px;padding:10px 14px;margin-bottom:5px;"
+                        f"display:flex;justify-content:space-between;"
+                        f"align-items:center;flex-wrap:wrap;gap:6px'>"
+                        f"<div><span style='font-size:14px;font-weight:700;"
+                        f"color:#1e293b'>{_ms['stock']}</span>"
+                        f"<span style='font-size:11px;color:#64748b;"
+                        f"margin-left:8px'>{'BUY CE' if _is_ce else 'BUY PE'} | "
+                        f"{_rsi_disp}</span></div>"
+                        f"<div style='font-size:13px;font-weight:700;"
+                        f"color:{_sc}'>{_st}<br>"
+                        f"<span style='font-size:11px;font-weight:400;"
+                        f"color:#64748b'>{_sa}</span></div>"
+                        f"<div style='text-align:right;"
+                        f"font-size:13px;font-weight:700;color:{_pnl_col}'>"
+                        f"₹{_ms_cp:,.2f}<br>"
+                        f"<span style='font-size:11px'>{_pnl:+.2f} pts</span>"
+                        f"</div></div>",
+                        unsafe_allow_html=True
+                    )
+
+                st.markdown(
+                    f"<div style='background:#f8fafc;border-radius:8px;"
+                    f"padding:8px 14px;font-size:13px;margin-top:6px'>"
+                    f"🟢 Valid: <b>{len(_still_v)}</b> &nbsp;|&nbsp; "
+                    f"🟡 Weakening: <b>{len(_weaken)}</b> &nbsp;|&nbsp; "
+                    f"🔴 Expired/SL: <b>{len(_expd)}</b>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+                if st.button("🗑️ Clear Monitor", key="monitor_clear"):
+                    st.session_state.pop("monitor_stocks",None)
+                    st.rerun()
+
+
             if results_sorted:
                 st.markdown("---")
                 import plotly.graph_objects as go_scan

@@ -3370,14 +3370,28 @@ if st.sidebar.button(
          "Run at 9:00 AM for fastest 9:30 scan."
 ):
     # Collect all stocks to prepare
+    # Use SECTORS (globally defined) instead of SCANNER_UNIVERSE
+    # which is only defined inside the scanner tab
     _all_scan_stocks = []
-    for _grp, _stks in SCANNER_UNIVERSE.items():
+    for _grp, _stks in SECTORS.items():
         _all_scan_stocks.extend(_stks)
+    # Also add top F&O stocks
+    _top_fo = [
+        "NIFTY 50","BANK NIFTY","Reliance","HDFC Bank",
+        "ICICI Bank","TCS","Infosys","SBI","Wipro",
+        "Bajaj Finance","ITC","Sun Pharma","L&T","Maruti",
+        "Axis Bank","HCL Tech","ONGC","Bharti Airtel",
+        "Tata Steel","JSW Steel","Kotak Bank","Titan Company",
+        "Asian Paints","Nestle India","Power Grid","NTPC",
+        "Bajaj Auto","Eicher Motors","UltraTech Cement",
+        "Britannia","Cipla","Dr Reddys","Divis Lab"
+    ]
+    _all_scan_stocks.extend(_top_fo)
     # Remove duplicates preserve order
     _seen = set()
     _unique_stocks = []
     for _s in _all_scan_stocks:
-        if _s not in _seen:
+        if _s not in _seen and _s in STOCKS:
             _seen.add(_s)
             _unique_stocks.append(_s)
 

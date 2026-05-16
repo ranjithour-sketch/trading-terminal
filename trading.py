@@ -126,20 +126,37 @@ load_creds()
 # ── Background ML Pre-training ────────────────────────────
 # Train ML models for top stocks at startup
 # Stored in session_state so Diamond scan is instant
-def pretrain_ml_models(stock_list: list, max_stocks: int = 20):
+def pretrain_ml_models(
+    stock_list: list,
+    max_stocks: int = 20,
+    progress_bar=None,
+    status_text=None
+):
     """
-    Pre-train ML models for top stocks in background.
-    Called once at startup. Results cached in session_state.
+    Pre-train ML models for stocks in background.
+    Results cached in session_state.
     """
-    if "ml_models_trained" in st.session_state:
-        return  # Already trained this session
+    trained = st.session_state.get("ml_pretrained", {})
 
-    trained = {}
-    for sname in stock_list[:max_stocks]:
+    _to_train = [
+        s for s in stock_list[:max_stocks]
+        if s not in trained
+    ]
+
+    for _idx, sname in enumerate(_to_train):
         sym = STOCKS.get(sname)
         if not sym:
             continue
         try:
+            if status_text:
+                status_text.text(
+                    f"Training ML: {sname} "
+                    f"({_idx+1}/{len(_to_train)})"
+                )
+            if progress_bar:
+                progress_bar.progress(
+                    int((_idx+1)/len(_to_train)*100)
+                )
             df_ml = candles(sym, "1d")
             if df_ml is not None and len(df_ml) >= 100:
                 model = train_model(df_ml)
@@ -147,16 +164,57 @@ def pretrain_ml_models(stock_list: list, max_stocks: int = 20):
                     pred = predict_next_move(df_ml, model)
                     if pred and pred.get("ok"):
                         trained[sname] = {
-                            "direction":  pred["prediction"],
-                            "confidence": pred["confidence"],
-                            "reliability":pred["reliability"],
+                            "direction":   pred["prediction"],
+                            "confidence":  pred["confidence"],
+                            "reliability": pred["reliability"],
                             "ok": True
                         }
         except Exception:
             continue
 
-    st.session_state["ml_pretrained"]    = trained
-    st.session_state["ml_models_trained"]= True
+    st.session_state["ml_pretrained"]     = trained
+    st.session_state["ml_models_trained"] = True
+
+
+def prefetch_candles_cache(
+    stock_list: list,
+    timeframes: list = ["1h","1d"],
+    progress_bar=None,
+    status_text=None
+):
+    """
+    Pre-fetch 1h and 1d candles for all stocks.
+    Stored in session_state cache so scanner uses them instantly.
+    """
+    _cache = st.session_state.get("candle_cache", {})
+    _total = len(stock_list) * len(timeframes)
+    _done  = 0
+
+    for sname in stock_list:
+        sym = STOCKS.get(sname)
+        if not sym:
+            continue
+        for tf in timeframes:
+            _key = f"{sym}_{tf}"
+            if _key not in _cache:
+                try:
+                    if status_text:
+                        status_text.text(
+                            f"Caching {sname} {tf} candles..."
+                        )
+                    _df = candles(sym, tf)
+                    if _df is not None:
+                        _cache[_key] = _df
+                except Exception:
+                    pass
+            _done += 1
+            if progress_bar:
+                progress_bar.progress(
+                    int(_done/_total*100)
+                )
+
+    st.session_state["candle_cache"]         = _cache
+    st.session_state["candle_cache_ready"]   = True
 
 def get_ml_cached(sname: str) -> dict:
     """Get pre-trained ML result for a stock. Returns dict or None."""
@@ -3279,38 +3337,98 @@ else:
 
 st.sidebar.markdown("---")
 
-# ── ML Pre-training status ────────────────────────────────
-ml_trained = st.session_state.get("ml_models_trained", False)
-ml_cache   = st.session_state.get("ml_pretrained", {})
+# ── Prepare for Trading button ────────────────────────────
+ml_cache        = st.session_state.get("ml_pretrained", {})
+candle_ready    = st.session_state.get("candle_cache_ready", False)
+ml_trained      = st.session_state.get("ml_models_trained", False)
 
-if ml_trained:
+_prep_done = ml_trained and candle_ready
+_ml_count  = len(ml_cache)
+_cc_count  = len(st.session_state.get("candle_cache", {}))
+
+# Status display
+if _prep_done:
     st.sidebar.success(
-        f"🤖 ML Ready — {len(ml_cache)} stocks pre-trained"
+        f"✅ Ready to Trade! "
+        f"ML: {_ml_count} stocks | "
+        f"Candles: {_cc_count} cached"
+    )
+elif ml_trained:
+    st.sidebar.warning(
+        f"⚠️ ML cached ({_ml_count} stocks) "
+        f"but candles not pre-fetched"
     )
 else:
-    st.sidebar.info("🤖 ML not pre-trained yet")
-    if st.sidebar.button(
-        "Train ML Models (faster Diamond scan)",
-        key="pretrain_ml_btn"
-    ):
-        # Get current scan group stocks
-        _scan_grp = st.session_state.get("scan_group","")
-        _top_stocks = (
-            SECTORS.get(_scan_grp, []) if _scan_grp in SECTORS
-            else [
-                "NIFTY 50","BANK NIFTY","Reliance",
-                "HDFC Bank","ICICI Bank","TCS","Infosys",
-                "SBI","Wipro","Bajaj Finance","ITC",
-                "Sun Pharma","L&T","Maruti","Axis Bank",
-                "HCL Tech","ONGC","Bharti Airtel",
-                "Tata Steel","JSW Steel"
-            ]
+    st.sidebar.info("⚡ Click Prepare before 9:30 AM scan")
+
+# Prepare for Trading button
+if st.sidebar.button(
+    "⚡ Prepare for Trading",
+    key="prepare_trading_btn",
+    type="primary",
+    help="Pre-trains ML + caches candles for all scan stocks. "
+         "Run at 9:00 AM for fastest 9:30 scan."
+):
+    # Collect all stocks to prepare
+    _all_scan_stocks = []
+    for _grp, _stks in SCANNER_UNIVERSE.items():
+        _all_scan_stocks.extend(_stks)
+    # Remove duplicates preserve order
+    _seen = set()
+    _unique_stocks = []
+    for _s in _all_scan_stocks:
+        if _s not in _seen:
+            _seen.add(_s)
+            _unique_stocks.append(_s)
+
+    _total_stocks = len(_unique_stocks)
+
+    st.sidebar.markdown(
+        f"Preparing {_total_stocks} stocks... "
+        f"This takes 3-4 minutes. "
+        f"Do this at 9:00 AM."
+    )
+
+    # Phase 1: Pre-fetch candles
+    with st.sidebar:
+        st.markdown("**Phase 1: Caching candles...**")
+        _p1_bar  = st.progress(0)
+        _p1_text = st.empty()
+        prefetch_candles_cache(
+            _unique_stocks,
+            timeframes=["1h","1d"],
+            progress_bar=_p1_bar,
+            status_text=_p1_text
         )
-        with st.sidebar:
-            with st.spinner(
-                f"Training ML for {len(_top_stocks[:20])} stocks..."
-            ):
-                pretrain_ml_models(_top_stocks, max_stocks=20)
+        _p1_text.text("✅ Candles cached!")
+
+        # Phase 2: Pre-train ML
+        st.markdown("**Phase 2: Training ML models...**")
+        _p2_bar  = st.progress(0)
+        _p2_text = st.empty()
+        pretrain_ml_models(
+            _unique_stocks,
+            max_stocks=_total_stocks,
+            progress_bar=_p2_bar,
+            status_text=_p2_text
+        )
+        _p2_text.text(
+            f"✅ ML trained for "
+            f"{len(st.session_state.get('ml_pretrained',{}))} stocks!"
+        )
+
+    st.rerun()
+
+# Clear cache button
+if _prep_done:
+    if st.sidebar.button(
+        "🗑️ Clear Cache & Retrain",
+        key="clear_prep_cache"
+    ):
+        st.session_state.pop("ml_pretrained", None)
+        st.session_state.pop("ml_models_trained", None)
+        st.session_state.pop("candle_cache", None)
+        st.session_state.pop("candle_cache_ready", None)
         st.rerun()
 
 st.sidebar.markdown("---")
@@ -6327,9 +6445,10 @@ with T3:
                     ml_confidence = _cached_ml["confidence"]
                     ml_agrees     = (ml_direction == direction)
                 else:
-                    # Train fresh if not cached
+                    # Train fresh — use candle cache if available
                     try:
-                        df_ml = candles(sym, "1d")
+                        _cc = st.session_state.get("candle_cache",{})
+                        df_ml = _cc.get(f"{sym}_1d") or candles(sym,"1d")
                         if df_ml is not None and len(df_ml) >= 100:
                             ml_model = train_model(df_ml)
                             if ml_model.get("ok"):
@@ -6344,7 +6463,8 @@ with T3:
                         pass
 
                 try:
-                    df_1h = candles(sym, "1h")
+                    _cc   = st.session_state.get("candle_cache",{})
+                    df_1h = _cc.get(f"{sym}_1h") or candles(sym,"1h")
                     if df_1h is not None and len(df_1h) >= 55:
                         sig_1h = compute_all(df_1h, slp)
                         if sig_1h:
@@ -6353,7 +6473,7 @@ with T3:
                     pass
 
                 try:
-                    df_1d = candles(sym, "1d")
+                    df_1d = _cc.get(f"{sym}_1d") or candles(sym, "1d")
                     if df_1d is not None and len(df_1d) >= 55:
                         sig_1d = compute_all(df_1d, slp)
                         if sig_1d:

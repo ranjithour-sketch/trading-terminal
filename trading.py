@@ -289,6 +289,7 @@ TAB_ROUTES = {
     "manager":   9,
     "paper":     10,
     "orders":    11,
+    "evening":   12,
 }
 TAB_NAMES = [
     "📋 Watchlist",
@@ -303,8 +304,9 @@ TAB_NAMES = [
     "🛡️ Trade Manager",
     "📝 Paper Trading",
     "⚡ Auto Orders",
+    "🌙 Evening Scan",
 ]
-TAB_ICONS = ["📋","🎯","🔍","🤖","🏦","📊","🔗","🧪","🎯","🛡️","📝","⚡"]
+TAB_ICONS = ["📋","🎯","🔍","🤖","🏦","📊","🔗","🧪","🎯","🛡️","📝","⚡","🌙"]
 TAB_KEYS  = list(TAB_ROUTES.keys())
 
 # Read current tab from URL
@@ -3243,6 +3245,7 @@ with st.expander("Open any tab in a separate browser window"):
         ("🛡️ Trade Manager","manager",   "#1e3a5f"),
         ("📝 Paper Trading", "paper",     "#0f766e"),
         ("⚡ Auto Orders",   "orders",    "#dc2626"),
+        ("🌙 Evening Scan",  "evening",   "#1e1b4b"),
     ]
     for idx, (lname, lkey, lcolor) in enumerate(link_data):
         col_idx = idx % 5
@@ -3610,7 +3613,7 @@ stick = st.session_state["st"]
 # ══════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════
-T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,T12 = st.tabs(TAB_NAMES)
+T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,T12,T13 = st.tabs(TAB_NAMES)
 
 # ── Reusable inline stock search widget ──────────────────
 def inline_stock_search(tab_key: str):
@@ -13185,6 +13188,595 @@ with T12:
                         st.info("No orders placed today.")
                 except Exception as _he:
                     st.error(f"Failed to load orders: {_he}")
+
+
+# ╔══════════════════════════════════════════════════════╗
+# ║  TAB 13 — EVENING SCAN                              ║
+# ╚══════════════════════════════════════════════════════╝
+with T13:
+    st.markdown("### 🌙 Evening Pre-Scan — Tomorrow's Watchlist")
+    st.caption(
+        "Run this at 3:30 PM after market closes. "
+        "Analyses daily candles to identify tomorrow's best candidates. "
+        "Come to the scanner next morning already knowing which stocks to watch."
+    )
+
+    # ── How to use guide ──────────────────────────────────
+    with st.expander("📖 How to use Evening Scan", expanded=False):
+        st.markdown("""
+        **Step 1 — Run at 3:30 PM (after market close)**
+        Click Scan Tomorrow's Candidates below.
+
+        **Step 2 — Review the watchlist**
+        Stocks are ranked by daily signal strength.
+        Note the top 5-8 stocks.
+
+        **Step 3 — Check overnight context**
+        Before sleeping check:
+        - US market direction (S&P 500, Nasdaq)
+        - Gift Nifty futures direction
+        - Any major overnight news
+
+        **Step 4 — Next morning at 9:00 AM**
+        These stocks are your priority candidates.
+        Run Prepare for Trading → then Scanner.
+        Confirm the evening signal with the morning 15m signal.
+
+        **Step 5 — Enter only when both confirm**
+        Evening scan said BUY CE on HDFC Bank +
+        Morning 15m scanner also says BUY CE →
+        Highest confidence entry.
+        """)
+
+    # ── Settings ──────────────────────────────────────────
+    ev1, ev2, ev3 = st.columns(3)
+    with ev1:
+        ev_group = st.selectbox(
+            "Stock group",
+            ["Top F&O Stocks"] + list(SECTORS.keys()),
+            key="ev_group"
+        )
+    with ev2:
+        ev_min_score = st.slider(
+            "Minimum daily score",
+            5, 9, 6,
+            key="ev_min_score",
+            help="6+ for watchlist, 8+ for high conviction"
+        )
+    with ev3:
+        ev_min_rr = st.selectbox(
+            "Min R:R",
+            [1.0, 1.5, 2.0],
+            index=0,
+            key="ev_min_rr"
+        )
+
+    # Stock universe for evening scan
+    if ev_group == "Top F&O Stocks":
+        ev_stocks = [
+            "NIFTY 50","BANK NIFTY","Reliance","HDFC Bank",
+            "ICICI Bank","TCS","Infosys","SBI","Wipro",
+            "Bajaj Finance","ITC","Sun Pharma","L&T","Maruti",
+            "Axis Bank","HCL Tech","ONGC","Bharti Airtel",
+            "Tata Steel","JSW Steel","Kotak Bank","Titan Company",
+            "Asian Paints","Nestle India","Power Grid","NTPC",
+            "Bajaj Auto","Eicher Motors","Cipla","Dr Reddys",
+            "Divis Lab","UltraTech Cement","Britannia"
+        ]
+    else:
+        ev_stocks = SECTORS.get(ev_group, [])
+
+    if st.button(
+        "🌙 Scan Tomorrow's Candidates",
+        type="primary",
+        key="ev_scan_btn",
+        use_container_width=True
+    ):
+        st.session_state["ev_scanning"] = True
+        st.session_state["ev_results"]  = []
+        st.session_state["ev_group_used"] = ev_group
+
+    if st.session_state.get("ev_scanning"):
+        _ev_results = []
+        _ev_prog    = st.progress(0, text="Scanning daily candles...")
+        _ev_status  = st.empty()
+        _ev_total   = len(ev_stocks)
+
+        for _ei, sname in enumerate(ev_stocks):
+            sym = STOCKS.get(sname)
+            if not sym:
+                continue
+
+            _ev_prog.progress(
+                int((_ei+1)/_ev_total*100),
+                text=f"Analysing {sname} daily chart... ({_ei+1}/{_ev_total})"
+            )
+
+            try:
+                # Use daily candles for evening scan
+                df_ev = candles(sym, "1d")
+                if df_ev is None or len(df_ev) < 55:
+                    continue
+
+                lp_ev = live_price(sym)
+                sig_ev = compute_all(df_ev, lp_ev)
+                if not sig_ev:
+                    continue
+
+                cp_ev  = sig_ev["cp"]
+                dir_ev = sig_ev["direction"]
+                if dir_ev not in ["UPTREND","DOWNTREND"]:
+                    continue
+
+                score_ev = (
+                    sig_ev["up_score"]
+                    if dir_ev == "UPTREND"
+                    else sig_ev["dn_score"]
+                )
+                if score_ev < ev_min_score:
+                    continue
+
+                # Entry / SL / Target on daily
+                is_ce_ev = dir_ev == "UPTREND"
+                atr_ev   = sig_ev["atrv"]
+                entry_ev = round(sig_ev["e9v"], 2)
+                sl_ev    = round(
+                    entry_ev - atr_ev if is_ce_ev
+                    else entry_ev + atr_ev, 2
+                )
+                t1_ev = round(
+                    entry_ev + 1.5*atr_ev if is_ce_ev
+                    else entry_ev - 1.5*atr_ev, 2
+                )
+                t2_ev = round(
+                    entry_ev + 2.5*atr_ev if is_ce_ev
+                    else entry_ev - 2.5*atr_ev, 2
+                )
+                rr_ev = round(
+                    abs(t1_ev-entry_ev) /
+                    (abs(entry_ev-sl_ev)+0.001), 2
+                )
+                if rr_ev < ev_min_rr:
+                    continue
+
+                # Daily candlestick pattern
+                _patterns_ev = sig_ev.get("patterns",[])
+                _bull_pats = [
+                    p[0] for p in _patterns_ev
+                    if p[1]=="bullish"
+                ]
+                _bear_pats = [
+                    p[0] for p in _patterns_ev
+                    if p[1]=="bearish"
+                ]
+
+                # Key level proximity
+                w_pivot_ev = sig_ev.get("w_pivot", 0)
+                m_pivot_ev = sig_ev.get("m_pivot", 0)
+                near_weekly = (
+                    abs(cp_ev - w_pivot_ev) / cp_ev < 0.01
+                    if w_pivot_ev > 0 else False
+                )
+                near_monthly = (
+                    abs(cp_ev - m_pivot_ev) / cp_ev < 0.02
+                    if m_pivot_ev > 0 else False
+                )
+
+                # BB zone
+                vwap_zone_ev = sig_ev.get("vwap_zone","FAIR_VALUE")
+
+                # RSI
+                rsi_ev = sig_ev["rv"]
+
+                # Volume
+                vol_surge_ev = sig_ev.get("vsurge", False)
+
+                # ML on daily
+                ml_ev_dir  = "UNKNOWN"
+                ml_ev_conf = 0
+                try:
+                    ml_ev_model = train_model(df_ev)
+                    if ml_ev_model.get("ok"):
+                        ml_ev_pred = predict_next_move(
+                            df_ev, ml_ev_model
+                        )
+                        if ml_ev_pred and ml_ev_pred.get("ok"):
+                            ml_ev_dir  = ml_ev_pred["prediction"]
+                            ml_ev_conf = ml_ev_pred["confidence"]
+                except Exception:
+                    pass
+
+                # Conviction score
+                _conviction = score_ev
+                if ml_ev_dir == dir_ev:
+                    _conviction += 1.5
+                if near_weekly or near_monthly:
+                    _conviction += 1
+                if vol_surge_ev:
+                    _conviction += 0.5
+                if vwap_zone_ev in ["OVERSOLD","EXTREME_OS"] and is_ce_ev:
+                    _conviction += 1
+                if vwap_zone_ev in ["OVERBOUGHT","EXTREME_OB"] and not is_ce_ev:
+                    _conviction += 1
+                if _bull_pats and is_ce_ev:
+                    _conviction += 0.5
+                if _bear_pats and not is_ce_ev:
+                    _conviction += 0.5
+
+                _ev_results.append({
+                    "Stock":       sname,
+                    "Sym":         sym,
+                    "Action":      "BUY CE" if is_ce_ev else "BUY PE",
+                    "Direction":   dir_ev,
+                    "Score":       score_ev,
+                    "Conviction":  round(_conviction, 1),
+                    "RSI":         round(rsi_ev, 1),
+                    "RR":          rr_ev,
+                    "Entry":       entry_ev,
+                    "SL":          sl_ev,
+                    "T1":          t1_ev,
+                    "T2":          t2_ev,
+                    "ATR":         round(atr_ev, 2),
+                    "ML":          ml_ev_dir,
+                    "ML_Conf":     ml_ev_conf,
+                    "ML_Agrees":   ml_ev_dir == dir_ev,
+                    "Vol_Surge":   vol_surge_ev,
+                    "VWAP_Zone":   vwap_zone_ev,
+                    "Near_Weekly": near_weekly,
+                    "Near_Monthly":near_monthly,
+                    "Bull_Pats":   ", ".join(_bull_pats[:2]),
+                    "Bear_Pats":   ", ".join(_bear_pats[:2]),
+                    "W_Pivot":     round(w_pivot_ev, 2),
+                    "M_Pivot":     round(m_pivot_ev, 2),
+                })
+
+            except Exception:
+                continue
+
+        _ev_prog.empty()
+        _ev_status.empty()
+
+        # Sort by conviction
+        _ev_results.sort(
+            key=lambda x: x["Conviction"], reverse=True
+        )
+        st.session_state["ev_results"]  = _ev_results
+        st.session_state["ev_scanning"] = False
+        st.session_state["ev_scan_time"]= datetime.now().strftime(
+            "%d %b %Y %H:%M"
+        )
+        st.rerun()
+
+    # ── Display Evening Scan Results ──────────────────────
+    _ev_res  = st.session_state.get("ev_results", [])
+    _ev_time = st.session_state.get("ev_scan_time", "")
+
+    if _ev_res:
+        _ev_ce = [r for r in _ev_res if r["Direction"]=="UPTREND"]
+        _ev_pe = [r for r in _ev_res if r["Direction"]=="DOWNTREND"]
+
+        st.markdown(
+            f"<div style='background:#1e1b4b;border-radius:12px;"
+            f"padding:14px 20px;margin-bottom:16px'>"
+            f"<span style='color:#a5b4fc;font-size:13px'>"
+            f"🌙 Evening scan completed: {_ev_time} | "
+            f"Scanned: {len(ev_stocks)} stocks | "
+            f"Found: {len(_ev_res)} candidates | "
+            f"CE: {len(_ev_ce)} | PE: {len(_ev_pe)}"
+            f"</span></div>",
+            unsafe_allow_html=True
+        )
+
+        # Save to watchlist button
+        if st.button(
+            "💾 Save as Tomorrow's Watchlist",
+            key="ev_save",
+            type="primary"
+        ):
+            st.session_state["tomorrow_watchlist"] = _ev_res
+            st.success(
+                f"✅ {len(_ev_res)} stocks saved as tomorrow's watchlist!"
+            )
+
+        # Tabs for CE and PE
+        ev_tab1, ev_tab2 = st.tabs([
+            f"📈 BUY CE ({len(_ev_ce)} stocks)",
+            f"📉 BUY PE ({len(_ev_pe)} stocks)"
+        ])
+
+        def _render_ev_cards(results, is_ce):
+            if not results:
+                st.info("No candidates found in this direction.")
+                return
+
+            for _ri, r in enumerate(results):
+                _conviction = r["Conviction"]
+                if _conviction >= 9:
+                    _grade    = "💎 VERY HIGH CONVICTION"
+                    _gbg      = "#1e1b4b"
+                    _gfg      = "#a5b4fc"
+                    _border   = "#7c3aed"
+                elif _conviction >= 7.5:
+                    _grade    = "🔥 HIGH CONVICTION"
+                    _gbg      = "#f0fdf4"
+                    _gfg      = "#166534"
+                    _border   = "#16a34a"
+                elif _conviction >= 6:
+                    _grade    = "⚡ MODERATE"
+                    _gbg      = "#fffbeb"
+                    _gfg      = "#92400e"
+                    _border   = "#d97706"
+                else:
+                    _grade    = "👀 WATCH"
+                    _gbg      = "#f8fafc"
+                    _gfg      = "#475569"
+                    _border   = "#94a3b8"
+
+                _col = "#16a34a" if is_ce else "#dc2626"
+
+                st.markdown(
+                    f"<div style='background:{_gbg};"
+                    f"border:2px solid {_border};"
+                    f"border-radius:14px;padding:16px;"
+                    f"margin-bottom:10px'>"
+
+                    # Header
+                    f"<div style='display:flex;"
+                    f"justify-content:space-between;"
+                    f"align-items:center;margin-bottom:10px'>"
+                    f"<div>"
+                    f"<span style='font-size:18px;font-weight:700;"
+                    f"color:#1e293b'>{r['Stock']}</span>"
+                    f"<span style='background:{_col};color:white;"
+                    f"padding:3px 10px;border-radius:10px;"
+                    f"font-size:12px;margin-left:8px'>"
+                    f"{r['Action']}</span>"
+                    f"<span style='font-size:12px;color:#64748b;"
+                    f"margin-left:8px'>"
+                    f"Daily Score {r['Score']}/10 | "
+                    f"RSI {r['RSI']}</span>"
+                    f"</div>"
+                    f"<div style='text-align:right'>"
+                    f"<div style='font-size:16px;font-weight:700;"
+                    f"color:{_border}'>{_grade}</div>"
+                    f"<div style='font-size:12px;color:#64748b'>"
+                    f"Conviction {r['Conviction']}/11</div>"
+                    f"</div></div>"
+
+                    # Key levels
+                    f"<div style='display:grid;"
+                    f"grid-template-columns:repeat(5,1fr);"
+                    f"gap:8px;margin-bottom:10px'>"
+
+                    f"<div style='background:white;border-radius:8px;"
+                    f"padding:8px;text-align:center'>"
+                    f"<div style='font-size:10px;color:#64748b'>Entry</div>"
+                    f"<div style='font-size:13px;font-weight:700;"
+                    f"color:#374151'>₹{r['Entry']:,.0f}</div></div>"
+
+                    f"<div style='background:#fef2f2;border-radius:8px;"
+                    f"padding:8px;text-align:center'>"
+                    f"<div style='font-size:10px;color:#64748b'>SL</div>"
+                    f"<div style='font-size:13px;font-weight:700;"
+                    f"color:#dc2626'>₹{r['SL']:,.0f}</div></div>"
+
+                    f"<div style='background:#f0fdf4;border-radius:8px;"
+                    f"padding:8px;text-align:center'>"
+                    f"<div style='font-size:10px;color:#64748b'>T1</div>"
+                    f"<div style='font-size:13px;font-weight:700;"
+                    f"color:#16a34a'>₹{r['T1']:,.0f}</div></div>"
+
+                    f"<div style='background:#f0fdf4;border-radius:8px;"
+                    f"padding:8px;text-align:center'>"
+                    f"<div style='font-size:10px;color:#64748b'>T2</div>"
+                    f"<div style='font-size:13px;font-weight:700;"
+                    f"color:#16a34a'>₹{r['T2']:,.0f}</div></div>"
+
+                    f"<div style='background:#eff6ff;border-radius:8px;"
+                    f"padding:8px;text-align:center'>"
+                    f"<div style='font-size:10px;color:#64748b'>R:R</div>"
+                    f"<div style='font-size:13px;font-weight:700;"
+                    f"color:#1d4ed8'>{r['RR']}:1</div></div>"
+                    f"</div>"
+
+                    # Confirmation factors
+                    f"<div style='display:flex;flex-wrap:wrap;gap:6px;"
+                    f"margin-bottom:8px'>"
+                    + (f"<span style='background:#dcfce7;color:#166534;"
+                       f"padding:3px 10px;border-radius:20px;"
+                       f"font-size:11px'>✅ ML {r['ML']} {r['ML_Conf']}%"
+                       f"</span>" if r["ML_Agrees"] else
+                       f"<span style='background:#fee2e2;color:#991b1b;"
+                       f"padding:3px 10px;border-radius:20px;"
+                       f"font-size:11px'>⚠️ ML {r['ML']}</span>")
+                    + (f"<span style='background:#dcfce7;color:#166534;"
+                       f"padding:3px 10px;border-radius:20px;"
+                       f"font-size:11px'>✅ Volume surge</span>"
+                       if r["Vol_Surge"] else "")
+                    + (f"<span style='background:#ede9fe;color:#5b21b6;"
+                       f"padding:3px 10px;border-radius:20px;"
+                       f"font-size:11px'>📍 Near Weekly Pivot ₹{r['W_Pivot']:,.0f}"
+                       f"</span>" if r["Near_Weekly"] else "")
+                    + (f"<span style='background:#ede9fe;color:#5b21b6;"
+                       f"padding:3px 10px;border-radius:20px;"
+                       f"font-size:11px'>📅 Near Monthly Pivot ₹{r['M_Pivot']:,.0f}"
+                       f"</span>" if r["Near_Monthly"] else "")
+                    + (f"<span style='background:#dcfce7;color:#166534;"
+                       f"padding:3px 10px;border-radius:20px;"
+                       f"font-size:11px'>🕯️ {r['Bull_Pats']}</span>"
+                       if r["Bull_Pats"] and is_ce else "")
+                    + (f"<span style='background:#fee2e2;color:#991b1b;"
+                       f"padding:3px 10px;border-radius:20px;"
+                       f"font-size:11px'>🕯️ {r['Bear_Pats']}</span>"
+                       if r["Bear_Pats"] and not is_ce else "")
+                    + (f"<span style='background:#f0fdf4;color:#166534;"
+                       f"padding:3px 10px;border-radius:20px;"
+                       f"font-size:11px'>📊 VWAP: {r['VWAP_Zone'].replace('_',' ')}"
+                       f"</span>")
+                    + f"</div>"
+
+                    # Morning confirmation reminder
+                    f"<div style='background:rgba(0,0,0,0.05);"
+                    f"border-radius:6px;padding:6px 10px;"
+                    f"font-size:11px;color:#64748b'>"
+                    f"⏰ Tomorrow morning: Confirm with 15m scanner signal "
+                    f"before entering. Both must agree."
+                    f"</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+                # Add to watchlist button
+                _ev_c1, _ev_c2 = st.columns(2)
+                with _ev_c1:
+                    if st.button(
+                        f"📊 Open in Trade Setup",
+                        key=f"ev_ts_{_ri}_{'ce' if is_ce else 'pe'}",
+                        use_container_width=True
+                    ):
+                        st.session_state["sn"] = r["Stock"]
+                        st.session_state["st"] = r["Sym"]
+                        st.rerun()
+                with _ev_c2:
+                    if st.button(
+                        f"⭐ Add to Watchlist",
+                        key=f"ev_wl_{_ri}_{'ce' if is_ce else 'pe'}",
+                        use_container_width=True
+                    ):
+                        _wl = st.session_state.get(
+                            "ev_watchlist", []
+                        )
+                        if r["Stock"] not in _wl:
+                            _wl.append(r["Stock"])
+                            st.session_state["ev_watchlist"] = _wl
+                            st.success(
+                                f"⭐ {r['Stock']} added to "
+                                f"tomorrow's watchlist!"
+                            )
+
+        with ev_tab1:
+            _render_ev_cards(_ev_ce, True)
+        with ev_tab2:
+            _render_ev_cards(_ev_pe, False)
+
+        # ── Tomorrow's Watchlist Summary ───────────────────
+        _ev_wl = st.session_state.get("ev_watchlist", [])
+        if _ev_wl:
+            st.markdown("---")
+            st.markdown("### ⭐ Tomorrow's Priority Watchlist")
+            st.caption(
+                "These stocks are pre-selected for tomorrow. "
+                "Confirm with morning 15m scanner before entering."
+            )
+            for _wi, _wstock in enumerate(_ev_wl):
+                _wr = next(
+                    (r for r in _ev_res if r["Stock"]==_wstock),
+                    None
+                )
+                if _wr:
+                    _wc = "#16a34a" if _wr["Direction"]=="UPTREND" else "#dc2626"
+                    st.markdown(
+                        f"<div style='background:#f8fafc;"
+                        f"border-left:4px solid {_wc};"
+                        f"padding:8px 14px;margin:3px 0;"
+                        f"border-radius:0 8px 8px 0;"
+                        f"display:flex;justify-content:space-between'>"
+                        f"<span style='font-weight:700'>"
+                        f"{_wstock}</span>"
+                        f"<span style='color:{_wc}'>"
+                        f"{_wr['Action']} | "
+                        f"Score {_wr['Score']}/10 | "
+                        f"Entry ₹{_wr['Entry']:,.0f}"
+                        f"</span></div>",
+                        unsafe_allow_html=True
+                    )
+
+            if st.button(
+                "🗑️ Clear Watchlist",
+                key="ev_clear_wl"
+            ):
+                st.session_state["ev_watchlist"] = []
+                st.rerun()
+
+        # ── Export to Excel ────────────────────────────────
+        st.markdown("---")
+        if st.button(
+            "📥 Export Evening Scan to Excel",
+            key="ev_export",
+            use_container_width=True
+        ):
+            import io
+            from openpyxl import Workbook as _EVWB
+            from openpyxl.styles import (
+                PatternFill as _EVPF,
+                Font as _EVFnt,
+                Alignment as _EVAl
+            )
+            _evwb  = _EVWB()
+            _evws  = _evwb.active
+            _evws.title = "Evening Scan"
+
+            _ev_hdrs = [
+                "Stock","Action","Score","Conviction","R:R",
+                "Entry","SL","T1","T2","RSI","ML","ML Conf%",
+                "Vol Surge","VWAP Zone","Near Weekly","Near Monthly",
+                "Bull Pattern","Bear Pattern"
+            ]
+            _hf = _EVPF("solid", fgColor="1e1b4b")
+            for _ci, _h in enumerate(_ev_hdrs, 1):
+                _c = _evws.cell(row=1, column=_ci, value=_h)
+                _c.fill = _hf
+                _c.font = _EVFnt(color="FFFFFF", bold=True)
+                _c.alignment = _EVAl(horizontal="center")
+                _evws.column_dimensions[
+                    _c.column_letter
+                ].width = max(12, len(_h)+2)
+
+            _gf = _EVPF("solid", fgColor="d1fae5")
+            _rf = _EVPF("solid", fgColor="fee2e2")
+            for _ri, r in enumerate(_ev_res, 2):
+                _row = [
+                    r["Stock"], r["Action"], r["Score"],
+                    r["Conviction"], r["RR"],
+                    r["Entry"], r["SL"], r["T1"], r["T2"],
+                    r["RSI"], r["ML"], r["ML_Conf"],
+                    "Yes" if r["Vol_Surge"] else "No",
+                    r["VWAP_Zone"],
+                    "Yes" if r["Near_Weekly"] else "No",
+                    "Yes" if r["Near_Monthly"] else "No",
+                    r["Bull_Pats"], r["Bear_Pats"]
+                ]
+                _rfl = (
+                    _gf if r["Direction"]=="UPTREND" else _rf
+                )
+                for _ci, _v in enumerate(_row, 1):
+                    _c = _evws.cell(row=_ri, column=_ci, value=_v)
+                    _c.fill = _rfl
+                    _c.alignment = _EVAl(horizontal="center")
+
+            _buf = io.BytesIO()
+            _evwb.save(_buf)
+            _buf.seek(0)
+            _fname = (
+                f"evening_scan_"
+                f"{datetime.now().strftime('%d%b%Y_%H%M')}.xlsx"
+            )
+            st.download_button(
+                label="📥 Download Evening Scan Excel",
+                data=_buf.getvalue(),
+                file_name=_fname,
+                mime=(
+                    "application/vnd.openxmlformats-"
+                    "officedocument.spreadsheetml.sheet"
+                ),
+                key="ev_dl"
+            )
+
+    elif not st.session_state.get("ev_scanning"):
+        st.info(
+            "Click **Scan Tomorrow's Candidates** above to start. "
+            "Best run at 3:30 PM after market closes."
+        )
 
 
 # ── Auto refresh ──────────────────────────────────────────

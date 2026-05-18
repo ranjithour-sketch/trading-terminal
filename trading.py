@@ -2172,7 +2172,17 @@ def candles(sym: str, interval: str) -> pd.DataFrame:
     """
     # ── Try Kite first ────────────────────────────────────
     kite = get_kite()
-    if kite and not sym.startswith("^"):
+
+    # Skip Kite for symbols that are Yahoo Finance only
+    # These include: indices (^), currencies (=X), commodities
+    _yahoo_only = (
+        sym.startswith("^") or
+        sym.endswith("=X") or
+        sym.endswith("=F") or
+        "GC" in sym or "CL" in sym or "SI" in sym
+    )
+
+    if kite and not _yahoo_only:
         try:
             nse_sym = sym.replace(".NS","").replace(".BO","")
 

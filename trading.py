@@ -7754,7 +7754,7 @@ with T3:
                     st.caption("Confirmed by technical score AND historical consistency.")
                 with sh2:
                     if tg_configured():
-                        if st.button("📱 Send All", key="scan_tg_all",
+                        if st.button("📱 Send All", key="scan_tg_all2",
                                      type="primary", use_container_width=True):
                             tok = st.session_state.get("tg_token_saved","")
                             cid = st.session_state.get("tg_chat_saved","")
@@ -13031,7 +13031,7 @@ with T12:
                     _ao_symbol_auto = st.text_input(
                         "Symbol (enter strike above)",
                         placeholder="Enter strike price first",
-                        key="ao_symbol",
+                        key="ao_symbol_disabled",
                         disabled=True
                     )
                 _ao_symbol = _ao_symbol_auto

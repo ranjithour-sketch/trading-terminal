@@ -178,13 +178,14 @@ def pretrain_ml_models(
 
 def prefetch_candles_cache(
     stock_list: list,
-    timeframes: list = ["1h","1d"],
+    timeframes: list = ["1d"],  # Only cache daily — 1h must be fresh
     progress_bar=None,
     status_text=None
 ):
     """
-    Pre-fetch 1h and 1d candles for all stocks.
-    Stored in session_state cache so scanner uses them instantly.
+    Pre-fetch ONLY daily candles for all stocks.
+    1h candles are NOT cached — they must be fetched fresh at scan time
+    because the morning 1h candle changes significantly after 9:15 AM.
     """
     _cache = st.session_state.get("candle_cache", {})
     _total = len(stock_list) * len(timeframes)
@@ -215,6 +216,8 @@ def prefetch_candles_cache(
 
     st.session_state["candle_cache"]         = _cache
     st.session_state["candle_cache_ready"]   = True
+    import time as _ts_time
+    st.session_state["prep_timestamp"]       = _ts_time.time()
 
 def get_ml_cached(sname: str) -> dict:
     """Get pre-trained ML result for a stock. Returns dict or None."""
@@ -3361,11 +3364,23 @@ _cc_count  = len(st.session_state.get("candle_cache", {}))
 
 # Status display
 if _prep_done:
-    st.sidebar.success(
-        f"✅ Ready to Trade! "
-        f"ML: {_ml_count} stocks | "
-        f"Candles: {_cc_count} cached"
-    )
+    # Check how old the cache is
+    import time as _prep_time
+    _cache_ts  = st.session_state.get("prep_timestamp", 0)
+    _cache_age = round((_prep_time.time() - _cache_ts) / 60)
+    _age_warn  = _cache_age > 60  # warn if older than 60 min
+
+    if _age_warn:
+        st.sidebar.warning(
+            f"⚠️ Cache is {_cache_age} min old. "
+            f"Re-run Prepare for fresh data."
+        )
+    else:
+        st.sidebar.success(
+            f"✅ Ready to Trade! "
+            f"ML: {_ml_count} stocks cached "
+            f"({_cache_age} min ago)"
+        )
 elif ml_trained:
     st.sidebar.warning(
         f"⚠️ ML cached ({_ml_count} stocks) "
@@ -6490,8 +6505,9 @@ with T3:
                         pass
 
                 try:
-                    _cc   = st.session_state.get("candle_cache",{})
-                    df_1h = _cc.get(f"{sym}_1h") or candles(sym,"1h")
+                    # Always fetch 1h fresh — morning candle changes
+                    # after 9:15 AM open, cached data is stale
+                    df_1h = candles(sym, "1h")
                     if df_1h is not None and len(df_1h) >= 55:
                         sig_1h = compute_all(df_1h, slp)
                         if sig_1h:
@@ -13207,8 +13223,15 @@ with T13:
     st.markdown("### 🌙 Evening Pre-Scan — Tomorrow's Watchlist")
     st.caption(
         "Run this at 3:30 PM after market closes. "
-        "Analyses daily candles to identify tomorrow's best candidates. "
-        "Come to the scanner next morning already knowing which stocks to watch."
+        "Identifies tomorrow's candidates based on daily candles. "
+        "⚠️ Always confirm with morning 15m scanner before entering. "
+        "Overnight news can change direction completely."
+    )
+    st.warning(
+        "⚠️ Evening Scan is a PREPARATION TOOL only — not a trade signal. "
+        "Never enter a trade based on Evening Scan alone. "
+        "Always wait for the 9:30 AM scanner to confirm the same direction "
+        "before entering any trade."
     )
 
     # ── How to use guide ──────────────────────────────────

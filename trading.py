@@ -3509,7 +3509,43 @@ if _prep_done:
         st.session_state.pop("ml_models_trained", None)
         st.session_state.pop("candle_cache", None)
         st.session_state.pop("candle_cache_ready", None)
+        st.session_state.pop("prep_timestamp", None)
+        st.session_state.pop("prep_date", None)
         st.rerun()
+
+# ── Full Terminal Clear Cache ──────────────────────────────
+st.sidebar.markdown("---")
+st.sidebar.markdown("**🔄 Terminal Cache**")
+if st.sidebar.button(
+    "🔄 Clear All & Fresh Start",
+    key="clear_all_cache",
+    help="Clears ALL cached data — scanner results, ML models, "
+         "candle data, NIFTY signal. Use this when signals seem "
+         "wrong or stale. Terminal will fetch everything fresh."
+):
+    # Clear everything except user trades and journal
+    _keys_to_keep = {
+        "active_trades",
+        "trade_journal",
+        "pt_trades",
+        "tg_token_saved",
+        "tg_chat_saved",
+        "kite_access_token",
+        "kite_request_token",
+        "ao_enabled",
+    }
+    _all_keys = list(st.session_state.keys())
+    _cleared = 0
+    for _k in _all_keys:
+        if _k not in _keys_to_keep:
+            del st.session_state[_k]
+            _cleared += 1
+    st.sidebar.success(
+        f"✅ Cleared {_cleared} cached items. "
+        f"Terminal is fresh. "
+        f"Click Prepare for Trading to recache."
+    )
+    st.rerun()
 
 st.sidebar.markdown("---")
 

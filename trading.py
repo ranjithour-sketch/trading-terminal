@@ -176,6 +176,28 @@ def pretrain_ml_models(
     st.session_state["ml_models_trained"] = True
 
 
+def is_cache_from_today() -> bool:
+    """Check if the preparation cache was built today."""
+    import datetime as _cdt
+    import pytz as _cptz
+    _ist   = _cptz.timezone("Asia/Kolkata")
+    _today = _cdt.datetime.now(_ist).date()
+    _cache_date = st.session_state.get("prep_date", None)
+    return str(_cache_date) == str(_today)
+
+
+def clear_stale_cache():
+    """Clear cache if it was built on a previous day."""
+    if not is_cache_from_today():
+        st.session_state.pop("candle_cache", None)
+        st.session_state.pop("candle_cache_ready", None)
+        st.session_state.pop("ml_pretrained", None)
+        st.session_state.pop("ml_models_trained", None)
+        st.session_state.pop("prep_timestamp", None)
+        st.session_state.pop("prep_date", None)
+        st.session_state.pop("nifty_corr_sig", None)
+
+
 def prefetch_candles_cache(
     stock_list: list,
     timeframes: list = ["1d"],  # Only cache daily — 1h must be fresh
@@ -186,6 +208,7 @@ def prefetch_candles_cache(
     Pre-fetch ONLY daily candles for all stocks.
     1h candles are NOT cached — they must be fetched fresh at scan time
     because the morning 1h candle changes significantly after 9:15 AM.
+    Cache is date-stamped and auto-clears on new trading day.
     """
     _cache = st.session_state.get("candle_cache", {})
     _total = len(stock_list) * len(timeframes)
@@ -217,7 +240,13 @@ def prefetch_candles_cache(
     st.session_state["candle_cache"]         = _cache
     st.session_state["candle_cache_ready"]   = True
     import time as _ts_time
-    st.session_state["prep_timestamp"]       = _ts_time.time()
+    import datetime as _prep_dt2
+    import pytz as _prep_ptz
+    _prep_ist = _prep_ptz.timezone("Asia/Kolkata")
+    st.session_state["prep_timestamp"] = _ts_time.time()
+    st.session_state["prep_date"]      = str(
+        _prep_dt2.datetime.now(_prep_ist).date()
+    )
 
 def get_ml_cached(sname: str) -> dict:
     """Get pre-trained ML result for a stock. Returns dict or None."""
@@ -3353,6 +3382,9 @@ else:
 
 st.sidebar.markdown("---")
 
+# ── Auto-clear stale cache from previous day ─────────────
+clear_stale_cache()
+
 # ── Prepare for Trading button ────────────────────────────
 ml_cache        = st.session_state.get("ml_pretrained", {})
 candle_ready    = st.session_state.get("candle_cache_ready", False)
@@ -3370,16 +3402,22 @@ if _prep_done:
     _cache_age = round((_prep_time.time() - _cache_ts) / 60)
     _age_warn  = _cache_age > 60  # warn if older than 60 min
 
+    _prep_date = st.session_state.get("prep_date","unknown")
     if _age_warn:
         st.sidebar.warning(
             f"⚠️ Cache is {_cache_age} min old. "
             f"Re-run Prepare for fresh data."
         )
+    elif not is_cache_from_today():
+        st.sidebar.error(
+            f"❌ Cache is from {_prep_date} — yesterday's data! "
+            f"Click Prepare for Trading to refresh."
+        )
     else:
         st.sidebar.success(
             f"✅ Ready to Trade! "
             f"ML: {_ml_count} stocks cached "
-            f"({_cache_age} min ago)"
+            f"({_cache_age} min ago) — Today's data"
         )
 elif ml_trained:
     st.sidebar.warning(
@@ -5925,46 +5963,80 @@ with T3:
     _min  = _now_ist.minute
     _time_dec = _hour + _min / 60.0  # decimal time
 
-    if 9.25 <= _time_dec < 10.0:
-        st.error(
-            "⏰ **OPENING SESSION WARNING (9:15 - 10:00 AM)** — "
-            "Market is highly volatile right now. "
-            "Signals are unreliable during first 45 minutes. "
-            "Wait until 10:00 AM before acting on any signal."
+    if 9.25 <= _time_dec < 9.5:
+        # 9:15 to 9:30 AM — first candle forming, wait
+        st.warning(
+            "⏰ **WAIT (9:15 - 9:30 AM)** — "
+            "First 15-minute candle is still forming. "
+            "Do NOT scan or enter yet. "
+            "Wait until 9:30 AM when first candle completes."
         )
         _session_ok = False
-        _session_label = "🔴 OPENING — Wait until 10:00 AM"
-    elif 10.0 <= _time_dec < 13.0:
+        _session_label = "🟡 WAIT — First candle forming"
+
+    elif 9.5 <= _time_dec < 9.75:
+        # 9:30 to 9:45 AM — BEST time to scan and enter
         st.success(
-            "✅ **MID SESSION (10:00 AM - 1:00 PM)** — "
-            "Best time to trade. Signals are most reliable now."
+            "🚀 **BEST TIME TO SCAN (9:30 - 9:45 AM)** — "
+            "First 15-minute candle just completed. "
+            "Institutions have shown their direction. "
+            "Run scanner now for highest quality signals."
         )
         _session_ok = True
-        _session_label = "🟢 MID SESSION — Best time to trade"
+        _session_label = "🟢 BEST TIME — Scan and enter now"
+
+    elif 9.75 <= _time_dec < 10.5:
+        # 9:45 to 10:30 AM — still good, enter on confirmed signals
+        st.success(
+            "✅ **PRIME SESSION (9:45 - 10:30 AM)** — "
+            "Good time to enter on confirmed signals. "
+            "Check Signal Monitor to ensure signals are still valid."
+        )
+        _session_ok = True
+        _session_label = "🟢 PRIME SESSION — Enter on confirmed signals"
+
+    elif 10.5 <= _time_dec < 13.0:
+        # 10:30 AM to 1:00 PM — trade carefully
+        st.info(
+            "ℹ️ **MID SESSION (10:30 AM - 1:00 PM)** — "
+            "Morning momentum may be fading. "
+            "Only enter on very strong Diamond signals. "
+            "Check Signal Monitor before entering."
+        )
+        _session_ok = True
+        _session_label = "🟡 MID SESSION — Diamond signals only"
+
     elif 13.0 <= _time_dec < 14.5:
+        # 1:00 to 2:30 PM — continuation trades only
         st.info(
             "ℹ️ **AFTERNOON SESSION (1:00 - 2:30 PM)** — "
-            "Good for continuation trades. "
-            "Avoid new entries after 2:00 PM."
+            "Only continuation trades on existing positions. "
+            "Avoid new entries. Prepare to exit by 2:45 PM."
         )
         _session_ok = True
-        _session_label = "🟡 AFTERNOON — Continuation trades only"
+        _session_label = "🟡 AFTERNOON — No new entries"
+
     elif 14.5 <= _time_dec < 15.3:
-        st.warning(
-            "⚠️ **PRE-CLOSE (2:30 - 3:15 PM)** — "
-            "Exit existing positions only. "
-            "Do NOT enter new trades."
+        # 2:30 to 3:15 PM — exit only
+        st.error(
+            "🔴 **EXIT TIME (2:30 - 3:15 PM)** — "
+            "Exit ALL intraday positions now. "
+            "Do NOT enter any new trades. "
+            "Options lose value very fast after 2:30 PM."
         )
         _session_ok = False
-        _session_label = "🔴 PRE-CLOSE — Exit only, no new entries"
+        _session_label = "🔴 EXIT TIME — Close all positions"
+
     elif _time_dec >= 15.3 or _time_dec < 9.25:
+        # Market closed
         st.info(
             "🕐 **MARKET CLOSED** — "
-            "You can scan to prepare for tomorrow. "
-            "Do not place any orders."
+            "Run Evening Scan to prepare tomorrow's watchlist. "
+            "Click Prepare for Trading at 9:00 AM tomorrow."
         )
-        _session_ok = True  # Allow scanning for prep
-        _session_label = "⚫ MARKET CLOSED — Prep for tomorrow"
+        _session_ok = True
+        _session_label = "⚫ MARKET CLOSED — Run Evening Scan"
+
     else:
         _session_ok = True
         _session_label = "🟢 Market open"
@@ -6940,6 +7012,18 @@ with T3:
                         unsafe_allow_html=True
                     )
 
+
+        # ── Market condition warning ───────────────────────
+        _all_sig_count = len(strong_r) + len(
+            st.session_state.get("diamond_results",[])
+        )
+        if len(strong_r) > 15:
+            st.warning(
+                f"⚠️ {len(strong_r)} strong signals found — unusually high. "
+                f"On choppy or news-driven days many signals fail quickly. "
+                f"Focus only on 💎 Diamond signals today. "
+                f"Verify volume on each signal before entering."
+            )
 
         if strong_r:
             st.markdown("---")
@@ -13498,6 +13582,17 @@ with T13:
             f"CE: {len(_ev_ce)} | PE: {len(_ev_pe)}"
             f"</span></div>",
             unsafe_allow_html=True
+        )
+
+        # Important clarification
+        st.info(
+            "ℹ️ Evening Scan uses DAILY candles — "
+            "it shows the overall daily trend direction. "
+            "Morning Scanner uses 15-MINUTE candles — "
+            "it shows intraday momentum. "
+            "They will often show DIFFERENT signals — this is correct. "
+            "Always trade based on the 9:30 AM 15-minute scanner, "
+            "not the Evening Scan direction."
         )
 
         # Save to watchlist button

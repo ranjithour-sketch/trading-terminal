@@ -62,6 +62,28 @@ st.set_page_config(
 )
 IST = pytz.timezone("Asia/Kolkata")
 
+# ── Auto-clear stale cache on every new trading day ────────
+# This runs FIRST before anything else on every page load
+_today_date = str(pytz.timezone("Asia/Kolkata") and
+    __import__("datetime").datetime.now(
+        pytz.timezone("Asia/Kolkata")
+    ).date())
+_cached_date = st.session_state.get("prep_date", None)
+if _cached_date and str(_cached_date) != _today_date:
+    # Cache from previous day — clear all trading data
+    _safe_keys = {
+        "active_trades", "trade_journal", "pt_trades",
+        "tg_token_saved", "tg_chat_saved",
+        "kite_access_token", "kite_request_token",
+        "ao_enabled", "ev_watchlist",
+    }
+    for _dk in list(st.session_state.keys()):
+        if _dk not in _safe_keys:
+            try:
+                del st.session_state[_dk]
+            except Exception:
+                pass
+
 # ── Persistent credential storage using JSON file ─────────
 import json, os
 
@@ -6125,29 +6147,47 @@ with T3:
     alert_score = min_score_scan  # used for display only
 
     # Mobile-friendly controls - stack vertically on small screens
-    # Fetch NIFTY correlation signal for filter
-    if "nifty_corr_sig" not in st.session_state:
-        with st.spinner("Loading NIFTY trend for correlation filter..."):
-            try:
-                _nf_df = candles("^NSEI", scan_tf)
-                _nf_lp = live_price("^NSEI")
-                if _nf_df is not None and len(_nf_df) >= 55:
-                    _nf_sig = compute_all(_nf_df, _nf_lp)
-                    st.session_state["nifty_corr_sig"] = _nf_sig
-            except Exception:
-                pass
+    # Fetch NIFTY correlation signal — ALWAYS fresh at scan time
+    # Never cache this — NIFTY direction changes every 15 minutes
+    with st.spinner("Checking NIFTY trend..."):
+        try:
+            _nf_df = candles("^NSEI", scan_tf)
+            _nf_lp = live_price("^NSEI")
+            if _nf_df is not None and len(_nf_df) >= 55:
+                _nf_sig = compute_all(_nf_df, _nf_lp)
+                st.session_state["nifty_corr_sig"] = _nf_sig
+        except Exception:
+            st.session_state["nifty_corr_sig"] = None
 
     _nf_s = st.session_state.get("nifty_corr_sig")
     if _nf_s:
-        _nfd = _nf_s.get("direction","SIDEWAYS")
-        _nfc = "#16a34a" if _nfd=="UPTREND" else "#dc2626" if _nfd=="DOWNTREND" else "#f59e0b"
+        _nfd      = _nf_s.get("direction","SIDEWAYS")
+        _nf_score = max(_nf_s.get("up_score",0), _nf_s.get("dn_score",0))
+        _nfc = (
+            "#16a34a" if _nfd=="UPTREND"
+            else "#dc2626" if _nfd=="DOWNTREND"
+            else "#f59e0b"
+        )
+
+        # If NIFTY score is below 7 — treat as SIDEWAYS
+        # Weak NIFTY trend should not force filter one direction
+        if _nf_score < 7:
+            _nfd_display = "SIDEWAYS (weak trend)"
+            _filter_msg  = "Both CE and PE signals shown (NIFTY trend too weak to filter)"
+        else:
+            _nfd_display = _nfd
+            _filter_msg  = (
+                "CE signals shown only" if _nfd=="UPTREND"
+                else "PE signals shown only" if _nfd=="DOWNTREND"
+                else "Both CE and PE signals shown"
+            )
+
         st.markdown(
             f"<div style='background:{_nfc}22;border:1px solid {_nfc};"
             f"border-radius:8px;padding:8px 14px;margin-bottom:8px;"
             f"font-size:13px;color:{_nfc}'>"
-            f"<b>NIFTY Correlation:</b> {_nfd} "
-            f"(Score {max(_nf_s['up_score'],_nf_s['dn_score'])}/10) — "
-            f"{'CE signals shown only' if _nfd=='UPTREND' else 'PE signals shown only' if _nfd=='DOWNTREND' else 'Both CE and PE signals shown'}"
+            f"<b>NIFTY Correlation:</b> {_nfd_display} "
+            f"(Score {_nf_score}/10) — {_filter_msg}"
             f"</div>",
             unsafe_allow_html=True
         )
@@ -6397,19 +6437,24 @@ with T3:
                         continue
 
                 # ── Fix 3: NIFTY Correlation Filter ──────────
-                # Skip CE signals if NIFTY itself is in downtrend
-                # Skip PE signals if NIFTY itself is in uptrend
+                # Only apply if NIFTY has a STRONG trend (score 7+)
+                # Weak NIFTY trend should not force all signals one way
                 _nifty_sig = st.session_state.get("nifty_corr_sig")
                 if _nifty_sig:
-                    _nifty_dir = _nifty_sig.get("direction","SIDEWAYS")
-                    if (direction == "UPTREND" and
-                            _nifty_dir == "DOWNTREND"):
-                        # CE signal but NIFTY is falling — skip
-                        continue
-                    elif (direction == "DOWNTREND" and
-                            _nifty_dir == "UPTREND"):
-                        # PE signal but NIFTY is rising — skip
-                        continue
+                    _nifty_dir   = _nifty_sig.get("direction","SIDEWAYS")
+                    _nifty_score = max(
+                        _nifty_sig.get("up_score",0),
+                        _nifty_sig.get("dn_score",0)
+                    )
+                    # Only filter if NIFTY trend is strong (7+)
+                    if _nifty_score >= 7:
+                        if (direction == "UPTREND" and
+                                _nifty_dir == "DOWNTREND"):
+                            continue
+                        elif (direction == "DOWNTREND" and
+                                _nifty_dir == "UPTREND"):
+                            continue
+                    # If NIFTY score < 7 — show both CE and PE signals
 
                 # CPR is informational only — not used as filter
                 # CPR from previous day may not match intraday moves

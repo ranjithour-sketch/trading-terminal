@@ -5888,16 +5888,40 @@ with T3:
         )
     with sc_b2:
         if st.button(
-            "🗑️ Clear & Rescan",
+            "🗑️ Clear Signals",
             key="scan_clear_cache",
             use_container_width=True,
-            help="Clears old results and fetches fresh data"
+            help="Clears ALL cached signals. Fresh scan will run."
         ):
-            # Clear all cached results
-            for _k in ["scan_results","scan_group_used",
-                       "scan_tf_used","scan_time"]:
+            # Clear ALL signal-related cache
+            _signal_keys = [
+                "scan_results",
+                "scan_group_used",
+                "scan_tf_used",
+                "scan_time",
+                "monitor_stocks",
+                "monitor_scan_time",
+                "monitor_scan_tf",
+                "monitor_candles",
+                "nifty_corr_sig",
+                "diamond_results",
+                "strong_results",
+                "scan_export_done",
+            ]
+            for _k in _signal_keys:
                 st.session_state.pop(_k, None)
+            # Also clear any cached msig_ keys
+            _msig_keys = [
+                k for k in st.session_state.keys()
+                if k.startswith("msig_") or
+                   k.startswith("tm_sig_") or
+                   k.startswith("tm_lp_")
+            ]
+            for _k in _msig_keys:
+                st.session_state.pop(_k, None)
+            # Clear data cache
             st.cache_data.clear()
+            st.success("✅ All signals cleared — ready for fresh scan!")
             st.rerun()
     st.markdown(
         "<div style='margin:6px 0;padding:10px 14px;"
@@ -6376,11 +6400,11 @@ with T3:
         scan_time = st.session_state.get("scan_time","")
         grp_used  = st.session_state.get("scan_group_used","")
         tf_used   = st.session_state.get("scan_tf_used","")
-        st.warning(
-            f"⚠️ Showing CACHED results from {scan_time} — "
-            f"{grp_used} | {tf_used} | "
-            f"Click **Scan All Stocks Now** or **🗑️ Clear & Rescan** "
-            f"to get fresh signals."
+        st.error(
+            f"🔴 SHOWING OLD SIGNALS FROM {scan_time} — "
+            f"These are NOT fresh signals. "
+            f"Click **🗑️ Clear Signals** then "
+            f"**🚀 Scan All Stocks Now** for fresh results."
         )
         # Re-apply stale signal filter on cached results
         # Prices may have changed since last scan

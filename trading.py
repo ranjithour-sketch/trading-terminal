@@ -1951,7 +1951,16 @@ def live_price(sym: str) -> dict:
     """
     # ── Try Kite first (real-time) ────────────────────────
     kite = get_kite()
-    if kite and not sym.startswith("^"):
+    # Skip Kite for Yahoo Finance only symbols
+    _yahoo_only = (
+        sym.startswith("^") or
+        sym.endswith("=X") or
+        sym.endswith("=F") or
+        "INR" in sym or "JPY" in sym or
+        "EUR" in sym or "GBP" in sym or
+        "GC" in sym or "CL" in sym
+    )
+    if kite and not _yahoo_only:
         try:
             # Convert Yahoo symbol to NSE symbol
             # e.g. HDFCBANK.NS -> NSE:HDFCBANK
@@ -2112,7 +2121,16 @@ def candles(sym: str, interval: str) -> pd.DataFrame:
     """
     # ── Try Kite first ────────────────────────────────────
     kite = get_kite()
-    if kite and not sym.startswith("^"):
+    # Skip Kite for Yahoo Finance only symbols
+    _yahoo_only = (
+        sym.startswith("^") or
+        sym.endswith("=X") or
+        sym.endswith("=F") or
+        "INR" in sym or "JPY" in sym or
+        "EUR" in sym or "GBP" in sym or
+        "GC" in sym or "CL" in sym
+    )
+    if kite and not _yahoo_only:
         try:
             nse_sym = sym.replace(".NS","").replace(".BO","")
 
